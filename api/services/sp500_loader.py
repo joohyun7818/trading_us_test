@@ -1,57 +1,45 @@
-# Wikipedia/yfinance에서 S&P 500 목록을 가져와 stocks 테이블에 UPSERT
+# GitHub CSV에서 S&P 500 목록을 가져와 stocks 테이블에 UPSERT
 import logging
+from io import StringIO
 from typing import Optional
 
-import aiohttp
+import httpx
 import pandas as pd
 import yfinance as yf
-from bs4 import BeautifulSoup
 
 from api.core.database import execute, execute_many, fetch_all, fetch_one
 
 logger = logging.getLogger(__name__)
 
-WIKI_SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+GITHUB_SP500_CSV = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
 
 
-async def _fetch_wikipedia_sp500() -> list[dict]:
-    """Wikipedia에서 S&P 500 종목 목록을 스크래핑한다."""
+async def _fetch_sp500_list() -> list[dict]:
+    """GitHub CSV에서 S&P 500 종목 목록을 가져온다."""
+    headers = {
+        "User-Agent": "AlphaFlow/1.0"
+    }
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            async with session.get(WIKI_SP500_URL) as resp:
-                if resp.status != 200:
-                    logger.error("Wikipedia HTTP %d", resp.status)
-                    return []
-                html = await resp.text()
+        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            resp = await client.get(GITHUB_SP500_CSV)
+            if resp.status_code != 200:
+                logger.error("GitHub CSV HTTP %d", resp.status_code)
+                return []
+            df = pd.read_csv(StringIO(resp.text))
     except Exception as e:
-        logger.error("Wikipedia fetch failed: %s", e)
+        logger.error("GitHub CSV fetch failed: %s", e)
         return []
 
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        table = soup.find("table", {"id": "constituents"})
-        if table is None:
-            tables = soup.find_all("table", {"class": "wikitable"})
-            table = tables[0] if tables else None
-        if table is None:
-            logger.error("S&P 500 table not found on Wikipedia")
-            return []
-
-        rows = table.find_all("tr")[1:]
-        stocks = []
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) < 4:
-                continue
-            symbol = cols[0].get_text(strip=True).replace(".", "-")
-            name = cols[1].get_text(strip=True)
-            sector = cols[3].get_text(strip=True)
+    stocks = []
+    for _, row in df.iterrows():
+        symbol = str(row.get("Symbol", "")).strip().replace(".", "-")
+        name = str(row.get("Security", "")).strip()
+        sector = str(row.get("GICS Sector", "")).strip()
+        if symbol and name:
             stocks.append({"symbol": symbol, "name": name, "sector": sector})
-        logger.info("Parsed %d S&P 500 stocks from Wikipedia", len(stocks))
-        return stocks
-    except Exception as e:
-        logger.error("Wikipedia parse failed: %s", e)
-        return []
+
+    logger.info("Parsed %d S&P 500 stocks from GitHub CSV", len(stocks))
+    return stocks
 
 
 async def _ensure_sector(sector_name: str) -> int:
@@ -79,7 +67,7 @@ async def _get_market_cap(symbol: str) -> Optional[int]:
 
 async def load_sp500() -> dict:
     """S&P 500 전 종목을 DB에 UPSERT하고 결과를 반환한다."""
-    stocks = await _fetch_wikipedia_sp500()
+    stocks = await _fetch_sp500_list()
     if not stocks:
         return {"status": "error", "message": "No stocks fetched", "count": 0}
 

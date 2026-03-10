@@ -48,37 +48,25 @@ def main() -> None:
     logger.info("Connecting to database...")
     try:
         conn = psycopg2.connect(dsn)
-        conn.autocommit = True
+        conn.autocommit = False
         cursor = conn.cursor()
 
-        statements = schema_sql.split(";")
-        executed = 0
-        errors = 0
+        # schema.sql 전체를 하나의 트랜잭션으로 실행
+        cursor.execute(schema_sql)
+        conn.commit()
 
-        for stmt in statements:
-            stmt = stmt.strip()
-            if not stmt or stmt.startswith("--"):
-                continue
-            try:
-                cursor.execute(stmt + ";")
-                executed += 1
-            except psycopg2.Error as e:
-                error_msg = str(e).strip()
-                if "already exists" in error_msg:
-                    logger.info("Skipped (already exists): %s...", stmt[:60])
-                else:
-                    logger.error("SQL error: %s\nStatement: %s...", error_msg, stmt[:80])
-                    errors += 1
+        logger.info("Database initialization complete: all statements executed successfully")
 
         cursor.close()
         conn.close()
 
-        logger.info("Database initialization complete: %d executed, %d errors", executed, errors)
-
     except psycopg2.Error as e:
-        logger.error("Database connection failed: %s", e)
+        logger.error("SQL execution failed: %s", str(e).strip())
+        conn.rollback()
+        conn.close()
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+
