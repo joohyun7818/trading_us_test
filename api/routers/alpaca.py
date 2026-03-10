@@ -91,7 +91,7 @@ async def place_sell_order(order: OrderRequest) -> dict:
 
 @router.get("/orders")
 async def list_orders(
-    status: str = Query(default="open", regex="^(open|closed|all)$"),
+    status: str = Query(default="open", pattern="^(open|closed|all)$"),
 ) -> list[dict]:
     """주문 목록을 조회한다."""
     return await get_orders(status=status)
