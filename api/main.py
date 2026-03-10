@@ -12,7 +12,7 @@ from api.core.config import settings
 from api.core.database import close_pool, init_db
 from api.routers import alpaca, dashboard, macro, news, rag
 from api.services.news_indexer import get_chroma_client
-from api.services.scheduler import setup_scheduler
+from api.services.scheduler import get_scheduler, setup_scheduler
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("AlphaFlow US shutting down...")
     try:
-        scheduler = setup_scheduler()
+        scheduler = get_scheduler()
         scheduler.shutdown(wait=False)
     except Exception:
         pass

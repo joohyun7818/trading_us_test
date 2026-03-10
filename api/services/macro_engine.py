@@ -141,12 +141,28 @@ def _calc_breadth() -> Optional[float]:
 
 
 def _calc_put_call() -> Optional[float]:
-    """풋콜 비율 기반 점수 (0-1, 높은 P/C = 공포 = 낮은 점수)."""
+    """풋콜 비율 기반 점수 (0-1, 높은 P/C = 공포 = 낮은 점수).
+    실시간 풋콜 비율 데이터 소스 미연동으로 중립값 반환."""
     return 0.5
 
 
-def _calc_macro_sentiment() -> float:
-    """매크로 뉴스 감성 점수 (DB에서 최근 매크로 뉴스 감성 평균)."""
+async def _calc_macro_sentiment() -> float:
+    """DB에서 최근 24시간 매크로 뉴스 감성 평균을 0-1 범위로 반환한다."""
+    try:
+        row = await fetch_one(
+            """
+            SELECT AVG(sentiment_score) as avg_sentiment
+            FROM news_articles
+            WHERE published_at > NOW() - INTERVAL '24 hours'
+              AND sentiment_score IS NOT NULL
+            """
+        )
+        if row and row["avg_sentiment"] is not None:
+            avg = float(row["avg_sentiment"])
+            # sentiment_score is in [-1, 1]; convert to [0, 1] range
+            return round(max(0.0, min(1.0, (avg + 1.0) / 2.0)), 4)
+    except Exception as e:
+        logger.error("Macro sentiment DB query failed: %s", e)
     return 0.5
 
 
@@ -158,7 +174,7 @@ async def calculate_regime() -> dict:
     market_rsi = _calc_market_rsi()
     breadth = _calc_breadth()
     put_call = _calc_put_call()
-    macro_sentiment = _calc_macro_sentiment()
+    macro_sentiment = await _calc_macro_sentiment()
 
     values = {
         "sp500_trend": sp500_trend or 0.5,
