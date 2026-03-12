@@ -40,7 +40,8 @@ async def generate(
     model: Optional[str] = None,
     system: Optional[str] = None,
     temperature: float = 0.3,
-    max_retries: int = 3,
+    num_predict: int = 2048,
+    max_retries: int = 2,
 ) -> str:
     """Ollama generate API를 호출한다. asyncio.Lock으로 순차 보장."""
     base = _get_base_url()
@@ -51,8 +52,11 @@ async def generate(
         "model": model,
         "prompt": prompt + " /no_think",
         "stream": False,
-        "options": {"temperature": temperature},
-        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
+        "options": {
+            "temperature": temperature,
+            "num_predict": num_predict,
+        },
+        "keep_alive": "30m",
     }
     if system:
         payload["system"] = system
@@ -69,7 +73,7 @@ async def generate(
             except Exception as e:
                 logger.error("Ollama generate attempt %d/%d failed: %s", attempt, max_retries, e)
                 if attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2)
 
     return ""
 
@@ -78,6 +82,7 @@ async def generate_fast(
     prompt: str,
     system: Optional[str] = None,
     temperature: float = 0.1,
+    num_predict: int = 2048,
 ) -> str:
     """빠른 1차 분류용 generate (qwen3:4b)."""
     return await generate(
@@ -85,6 +90,7 @@ async def generate_fast(
         model=settings.OLLAMA_FAST_MODEL,
         system=system,
         temperature=temperature,
+        num_predict=num_predict,
     )
 
 
@@ -94,7 +100,8 @@ async def generate_with_image(
     model: Optional[str] = None,
     system: Optional[str] = None,
     temperature: float = 0.3,
-    max_retries: int = 3,
+    num_predict: int = 2048,
+    max_retries: int = 2,
 ) -> str:
     """이미지를 포함한 멀티모달 generate (qwen3-vl:8b)."""
     base = _get_base_url()
@@ -107,8 +114,11 @@ async def generate_with_image(
         "prompt": prompt + " /no_think",
         "images": [image_b64],
         "stream": False,
-        "options": {"temperature": temperature},
-        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
+        "options": {
+            "temperature": temperature,
+            "num_predict": num_predict,
+        },
+        "keep_alive": "30m",
     }
     if system:
         payload["system"] = system
@@ -125,7 +135,7 @@ async def generate_with_image(
             except Exception as e:
                 logger.error("Ollama vision attempt %d/%d: %s", attempt, max_retries, e)
                 if attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2)
 
     return ""
 
@@ -133,7 +143,7 @@ async def generate_with_image(
 async def embed(
     text: str,
     model: Optional[str] = None,
-    max_retries: int = 3,
+    max_retries: int = 2,
 ) -> list[float]:
     """Ollama embeddings API를 호출한다."""
     base = _get_base_url()
@@ -143,7 +153,7 @@ async def embed(
     payload = {
         "model": model,
         "input": text,
-        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
+        "keep_alive": "30m",
     }
 
     async with _ollama_lock:
@@ -159,7 +169,7 @@ async def embed(
             except Exception as e:
                 logger.error("Ollama embed attempt %d/%d: %s", attempt, max_retries, e)
                 if attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2)
 
     return []
 

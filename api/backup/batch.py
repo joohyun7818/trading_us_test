@@ -2,6 +2,7 @@
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from api.core.database import execute, fetch_all, fetch_one
@@ -115,24 +116,8 @@ async def step2_news_sentiment() -> dict:
         return {"status": "error", "error": str(e)}
 
 
-async def _symbols_with_news(symbols: list[str]) -> list[str]:
-    """뉴스가 있는 종목만 필터링한다."""
-    if not symbols:
-        return []
-    placeholders = ", ".join(f"${i+1}" for i in range(len(symbols)))
-    rows = await fetch_all(
-        f"""
-        SELECT DISTINCT stock_symbol FROM news_articles
-        WHERE stock_symbol IN ({placeholders})
-          AND sentiment_score IS NOT NULL
-        """,
-        *symbols,
-    )
-    return [r["stock_symbol"] for r in rows]
-
-
 async def step3_deep_analysis(screened_symbols: Optional[list[str]] = None) -> dict:
-    """Step 3: 2차 RAG 분석. 뉴스가 없는 종목은 LLM 호출 스킵."""
+    """Step 3: 2차 RAG 분석 + 시각 분석."""
     start = time.time()
     try:
         if screened_symbols is None:
@@ -144,32 +129,11 @@ async def step3_deep_analysis(screened_symbols: Optional[list[str]] = None) -> d
             await _log_batch("morning", "step3", "completed", duration, {"analyzed": 0})
             return {"status": "ok", "analyzed": 0}
 
-        # 뉴스 있는 종목 필터링
-        symbols_with_news = await _symbols_with_news(screened_symbols)
-        symbols_without_news = [s for s in screened_symbols if s not in symbols_with_news]
-
-        if symbols_without_news:
-            logger.info(
-                "Step 3: %d symbols have news, %d skipped (no news)",
-                len(symbols_with_news), len(symbols_without_news),
-            )
-
         regime_result = await calculate_regime()
         macro_score = regime_result.get("regime_score", 0.5) * 100
 
         analyzed = []
-
-        # 뉴스 있는 종목: 풀 분석 (LLM 호출)
-        for symbol in symbols_with_news:
-            try:
-                result = await analyze_and_signal(symbol, macro_score=macro_score)
-                analyzed.append(result)
-                logger.info("Analyzed %s: %s (%.1f)", symbol, result["signal_type"], result["final_score"])
-            except Exception as e:
-                logger.error("Analysis failed for %s: %s", symbol, e)
-
-        # 뉴스 없는 종목: 수치 + 매크로만으로 시그널 (LLM 스킵)
-        for symbol in symbols_without_news:
+        for symbol in screened_symbols:
             try:
                 result = await analyze_and_signal(symbol, macro_score=macro_score)
                 analyzed.append(result)
@@ -179,8 +143,6 @@ async def step3_deep_analysis(screened_symbols: Optional[list[str]] = None) -> d
         duration = time.time() - start
         summary = {
             "analyzed_count": len(analyzed),
-            "with_news": len(symbols_with_news),
-            "without_news": len(symbols_without_news),
             "buy_signals": sum(1 for a in analyzed if a.get("signal_type") == "BUY"),
             "sell_signals": sum(1 for a in analyzed if a.get("signal_type") == "SELL"),
             "hold_signals": sum(1 for a in analyzed if a.get("signal_type") == "HOLD"),

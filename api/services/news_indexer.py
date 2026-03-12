@@ -1,6 +1,5 @@
 # 뉴스 → 청킹 → bge-m3 임베딩 → ChromaDB upsert, embedded=FALSE 기사 처리
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 import chromadb
@@ -11,8 +10,8 @@ from api.services.ollama_client import embed
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "stock_news"
-BATCH_SIZE = 50
-CHUNK_MAX_LENGTH = 1000
+BATCH_SIZE = 100
+CHUNK_MAX_LENGTH = 500
 
 _chroma_client: Optional[chromadb.ClientAPI] = None
 _collection: Optional[chromadb.Collection] = None
@@ -41,94 +40,83 @@ def get_collection() -> chromadb.Collection:
 
 
 def _chunk_text(text: str, max_length: int = CHUNK_MAX_LENGTH) -> list[str]:
-    """텍스트를 청크로 분할한다."""
+    """텍스트를 청크로 분할한다. 짧은 뉴스는 그대로 반환."""
     if not text:
         return []
     if len(text) <= max_length:
         return [text]
-
-    chunks = []
-    sentences = text.replace("\n", " ").split(". ")
-    current_chunk = ""
-
-    for sentence in sentences:
-        candidate = f"{current_chunk}. {sentence}" if current_chunk else sentence
-        if len(candidate) <= max_length:
-            current_chunk = candidate
-        else:
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-            current_chunk = sentence
-
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-
-    return chunks if chunks else [text[:max_length]]
+    # 긴 텍스트는 첫 청크만 사용 (속도 최적화)
+    return [text[:max_length].rsplit(" ", 1)[0]]
 
 
 async def index_unembedded_articles() -> dict:
-    """embedded=FALSE인 뉴스 기사를 임베딩하여 ChromaDB에 upsert한다."""
-    articles = await fetch_all(
-        """
-        SELECT id, stock_symbol, title, body, published_at, sentiment_score, sentiment_label
-        FROM news_articles
-        WHERE embedded = FALSE
-        ORDER BY id
-        LIMIT $1
-        """,
-        BATCH_SIZE,
-    )
-
-    if not articles:
-        return {"status": "ok", "indexed": 0}
-
+    """embedded=FALSE인 뉴스 기사를 반복적으로 임베딩하여 ChromaDB에 upsert한다."""
     collection = get_collection()
-    indexed = 0
-    errors = 0
+    total_indexed = 0
+    total_errors = 0
 
-    for article in articles:
-        try:
-            text = f"{article['title']} {article.get('body', '') or ''}"
-            chunks = _chunk_text(text)
+    while True:
+        articles = await fetch_all(
+            """
+            SELECT id, stock_symbol, title, body, published_at, sentiment_score, sentiment_label
+            FROM news_articles
+            WHERE embedded = FALSE
+            ORDER BY id
+            LIMIT $1
+            """,
+            BATCH_SIZE,
+        )
 
-            for idx, chunk in enumerate(chunks):
-                if not chunk.strip():
-                    continue
+        if not articles:
+            break
 
-                embedding = await embed(chunk)
-                if not embedding:
-                    continue
+        for article in articles:
+            try:
+                title = article.get("title", "") or ""
+                body = article.get("body", "") or ""
+                text = f"{title} {body}".strip()
+                chunks = _chunk_text(text)
 
-                doc_id = f"article_{article['id']}_chunk_{idx}"
-                pub_at = article.get("published_at")
-                pub_str = pub_at.isoformat() if pub_at else ""
+                for idx, chunk in enumerate(chunks):
+                    if not chunk.strip():
+                        continue
 
-                collection.upsert(
-                    ids=[doc_id],
-                    embeddings=[embedding],
-                    documents=[chunk],
-                    metadatas=[{
-                        "article_id": str(article["id"]),
-                        "stock_symbol": article["stock_symbol"],
-                        "published_at": pub_str,
-                        "sentiment_score": str(article.get("sentiment_score", 0)),
-                        "sentiment_label": article.get("sentiment_label", "neutral"),
-                        "chunk_index": str(idx),
-                    }],
+                    embedding = await embed(chunk)
+                    if not embedding:
+                        continue
+
+                    doc_id = f"article_{article['id']}_chunk_{idx}"
+                    pub_at = article.get("published_at")
+                    pub_str = pub_at.isoformat() if pub_at else ""
+
+                    collection.upsert(
+                        ids=[doc_id],
+                        embeddings=[embedding],
+                        documents=[chunk],
+                        metadatas=[{
+                            "article_id": str(article["id"]),
+                            "stock_symbol": article["stock_symbol"],
+                            "published_at": pub_str,
+                            "sentiment_score": str(article.get("sentiment_score", 0)),
+                            "sentiment_label": article.get("sentiment_label", "neutral"),
+                            "chunk_index": str(idx),
+                        }],
+                    )
+
+                await execute(
+                    "UPDATE news_articles SET embedded = TRUE WHERE id = $1",
+                    article["id"],
                 )
+                total_indexed += 1
 
-            await execute(
-                "UPDATE news_articles SET embedded = TRUE WHERE id = $1",
-                article["id"],
-            )
-            indexed += 1
+            except Exception as e:
+                logger.error("Indexing failed for article %d: %s", article["id"], e)
+                total_errors += 1
 
-        except Exception as e:
-            logger.error("Indexing failed for article %d: %s", article["id"], e)
-            errors += 1
+        logger.info("News indexing batch: %d indexed so far", total_indexed)
 
-    logger.info("News indexing: %d indexed, %d errors", indexed, errors)
-    return {"status": "ok", "indexed": indexed, "errors": errors}
+    logger.info("News indexing complete: %d indexed, %d errors", total_indexed, total_errors)
+    return {"status": "ok", "indexed": total_indexed, "errors": total_errors}
 
 
 async def get_index_status() -> dict:

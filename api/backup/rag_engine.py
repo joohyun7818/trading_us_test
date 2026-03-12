@@ -1,6 +1,5 @@
 # ChromaDB "stock_news" 컬렉션 similarity search, 프롬프트 조립
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -9,20 +8,8 @@ from api.services.ollama_client import embed
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = 15
 DEFAULT_DAYS = 7
-
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_MULTI_SPACE_RE = re.compile(r"\s+")
-
-
-def _clean_text(text: str) -> str:
-    """HTML 태그 제거 및 공백 정리."""
-    if not text:
-        return ""
-    text = _HTML_TAG_RE.sub(" ", text)
-    text = _MULTI_SPACE_RE.sub(" ", text)
-    return text.strip()
 
 
 async def search_similar_news(
@@ -41,7 +28,13 @@ async def search_similar_news(
 
     where_filter = None
     if symbol:
-        where_filter = {"stock_symbol": {"$eq": symbol}}
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        where_filter = {
+            "$and": [
+                {"stock_symbol": {"$eq": symbol}},
+                {"published_at": {"$gte": cutoff}},
+            ]
+        }
 
     try:
         results = collection.query(
@@ -52,7 +45,19 @@ async def search_similar_news(
         )
     except Exception as e:
         logger.error("ChromaDB query failed: %s", e)
-        return []
+        if where_filter and symbol:
+            try:
+                results = collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=top_k,
+                    where={"stock_symbol": {"$eq": symbol}},
+                    include=["documents", "metadatas", "distances"],
+                )
+            except Exception as e2:
+                logger.error("ChromaDB fallback query failed: %s", e2)
+                return []
+        else:
+            return []
 
     docs = results.get("documents", [[]])[0]
     metas = results.get("metadatas", [[]])[0]
@@ -61,19 +66,12 @@ async def search_similar_news(
     output = []
     for doc, meta, dist in zip(docs, metas, dists):
         output.append({
-            "text": _clean_text(doc),
+            "text": doc,
             "metadata": meta,
             "similarity": round(1 - dist, 4) if dist is not None else 0,
         })
 
     return output
-
-
-def _truncate_text(text: str, max_chars: int = 200) -> str:
-    """뉴스 본문을 max_chars 자로 잘라낸다."""
-    if not text or len(text) <= max_chars:
-        return text or ""
-    return text[:max_chars].rsplit(" ", 1)[0] + "..."
 
 
 def build_rag_prompt(
@@ -82,35 +80,45 @@ def build_rag_prompt(
     context_docs: list[dict],
     current_indicators: Optional[dict] = None,
 ) -> str:
-    """RAG 분석용 프롬프트를 조립한다 (축소형)."""
+    """RAG 분석용 프롬프트를 조립한다."""
     context_parts = []
     for i, doc in enumerate(context_docs, 1):
         meta = doc.get("metadata", {})
-        pub_date = str(meta.get("published_at", "unknown"))[:10]
+        pub_date = meta.get("published_at", "unknown")
         sentiment = meta.get("sentiment_label", "neutral")
         score = meta.get("sentiment_score", "0")
-        truncated = _truncate_text(doc["text"])
         context_parts.append(
-            f"[{i}] {pub_date} | {sentiment}({score}) | {truncated}"
+            f"[{i}] Date: {pub_date} | Sentiment: {sentiment} ({score})\n{doc['text']}"
         )
 
-    context_text = "\n".join(context_parts) if context_parts else "No recent news."
+    context_text = "\n\n".join(context_parts) if context_parts else "No recent news context available."
 
     indicators_text = ""
     if current_indicators:
-        items = [f"{k}:{v}" for k, v in current_indicators.items()]
-        indicators_text = "\nIndicators: " + ", ".join(items)
+        indicator_lines = []
+        for key, val in current_indicators.items():
+            indicator_lines.append(f"  {key}: {val}")
+        indicators_text = "\nCurrent Technical Indicators:\n" + "\n".join(indicator_lines)
 
-    prompt = f"""Analyze {symbol} stock. Answer in JSON only. No markdown, no explanation.
+    prompt = f"""You are an expert financial analyst. Analyze the stock {symbol} based on recent news and data.
 
-News:
+Question: {question}
+
+Recent News Context (sorted by relevance):
 {context_text}
 {indicators_text}
 
-Respond with ONLY this JSON:
-{{"sentiment_score": 0.0, "confidence": 0.0, "key_issues": [], "is_priced_in": false, "outlook": "neutral", "rationale": ""}}
+Provide your analysis in the following JSON format:
+{{
+  "sentiment_score": <float -1.0 to 1.0>,
+  "confidence": <float 0.0 to 1.0>,
+  "key_issues": [<list of key issues/themes>],
+  "is_priced_in": <boolean>,
+  "outlook": "<bullish|bearish|neutral>",
+  "rationale": "<detailed explanation in 2-3 sentences>"
+}}
 
-Fill in the values based on the news above."""
+Respond ONLY with valid JSON, no markdown or explanation."""
 
     return prompt
 
@@ -122,10 +130,10 @@ async def search_and_build_prompt(
 ) -> str:
     """유사 뉴스 검색 + 프롬프트 조립을 한 번에 수행한다."""
     if question is None:
-        question = f"{symbol} outlook"
+        question = f"What is the current outlook for {symbol}? Analyze recent news sentiment and key factors."
 
     context_docs = await search_similar_news(
-        query=f"{symbol} stock news",
+        query=f"{symbol} stock news analysis outlook",
         symbol=symbol,
     )
 
