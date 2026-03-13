@@ -10,9 +10,12 @@ from fastapi.staticfiles import StaticFiles
 
 from api.core.config import settings
 from api.core.database import close_pool, init_db
-from api.routers import alpaca, dashboard, macro, news, rag
+from api.routers import alpaca, dashboard, macro, news, rag, performance
 from api.services.news_indexer import get_chroma_client
 from api.services.scheduler import get_scheduler, setup_scheduler
+
+
+
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
@@ -79,7 +82,7 @@ app.include_router(news.router)
 app.include_router(alpaca.router)
 app.include_router(rag.router)
 app.include_router(macro.router)
-
+app.include_router(performance.router)
 
 @app.get("/api/health")
 async def health_check() -> dict:
@@ -99,6 +102,7 @@ async def run_batch() -> dict:
     """전체 배치를 수동 실행한다."""
     from api.services.batch import run_full_batch
     return await run_full_batch()
+
 
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
