@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from api.core.config import settings
 from api.core.database import close_pool, init_db
 from api.core.auth import verify_api_key
-from api.routers import alpaca, dashboard, macro, news, rag, performance, geopolitical
+from api.routers import alpaca, backtest, dashboard, macro, news, rag, performance, geopolitical
 from api.services.news_indexer import get_chroma_client
 from api.services.scheduler import get_scheduler, setup_scheduler
 
@@ -90,6 +90,7 @@ app.include_router(rag.router)
 app.include_router(macro.router)
 app.include_router(performance.router)
 app.include_router(geopolitical.router)
+app.include_router(backtest.router)
 
 
 @app.get("/api/health")
