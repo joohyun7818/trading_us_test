@@ -47,6 +47,7 @@ class BacktestResult(BaseModel):
     signals: list[dict]
 
 
+# NOTE: Phase 1 임시 저장소(프로세스 메모리). 재시작 시 결과는 유지되지 않는다.
 _BACKTEST_RESULTS: dict[str, dict] = {}
 
 
@@ -228,10 +229,8 @@ async def run_backtest(config: BacktestConfig) -> dict:
 
         for symbol, row in day_df.iterrows():
             numeric_score = float(row["numeric_score"])
-            if not (
-                numeric_score >= config.screening_upper
-                or numeric_score <= config.screening_lower
-            ):
+            in_middle_band = config.screening_lower < numeric_score < config.screening_upper
+            if in_middle_band:
                 continue
 
             base_score = (
@@ -267,7 +266,14 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 continue
 
             if signal_type == "BUY":
-                if symbol in positions or len(positions) >= config.max_positions or cash <= 0:
+                if symbol in positions:
+                    logger.debug("Skip BUY %s on %s: already holding", symbol, day)
+                    continue
+                if len(positions) >= config.max_positions:
+                    logger.debug("Skip BUY %s on %s: max positions reached", symbol, day)
+                    continue
+                if cash <= 0:
+                    logger.debug("Skip BUY %s on %s: no cash", symbol, day)
                     continue
                 notional = min(config.max_order_amount, cash)
                 if notional <= 0:
