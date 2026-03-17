@@ -2,10 +2,11 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from pydantic import BaseModel
 
 from api.core.database import execute, fetch_all, fetch_one
+from api.core.auth import verify_api_key
 from api.services.macro_engine import calculate_regime, get_regime_history
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ async def get_current_regime() -> dict:
     return row
 
 
-@router.post("/regime/calculate")
+@router.post("/regime/calculate", dependencies=[Depends(verify_api_key)])
 async def trigger_regime_calculation() -> dict:
     """매크로 레짐 계산을 수동 트리거한다."""
     result = await calculate_regime()
@@ -121,7 +122,7 @@ async def get_setting(key: str) -> dict:
     return row
 
 
-@router.put("/settings/{key}")
+@router.put("/settings/{key}", dependencies=[Depends(verify_api_key)])
 async def update_setting(key: str, body: SettingUpdate) -> dict:
     """설정을 업데이트한다."""
     existing = await fetch_one("SELECT key FROM settings WHERE key = $1", key)

@@ -8,6 +8,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """AlphaFlow US 전체 환경변수 설정"""
 
+    # ── Security ────────────────────────────────────────────
+    API_KEY: str = ""
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
     # ── PostgreSQL ──────────────────────────────────────────
     DATABASE_URL: str = "postgresql://alphaflow:alphaflow123@localhost:5432/alphaflow_us"
 
@@ -43,6 +47,11 @@ class Settings(BaseSettings):
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
     LOG_LEVEL: str = "INFO"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """CORS_ORIGINS를 쉼표로 분리하여 리스트로 반환한다."""
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

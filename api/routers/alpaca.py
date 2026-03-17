@@ -2,10 +2,11 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from pydantic import BaseModel
 
 from api.core.config import settings
+from api.core.auth import verify_api_key
 from api.services.alpaca_client import (
     cancel_order,
     get_account,
@@ -65,7 +66,7 @@ async def get_holdings() -> list[dict]:
     return await get_positions()
 
 
-@router.post("/order/buy")
+@router.post("/order/buy", dependencies=[Depends(verify_api_key)])
 async def place_buy_order(order: OrderRequest) -> dict:
     """매수 주문을 제출한다."""
     return await submit_order(
@@ -77,7 +78,7 @@ async def place_buy_order(order: OrderRequest) -> dict:
     )
 
 
-@router.post("/order/sell")
+@router.post("/order/sell", dependencies=[Depends(verify_api_key)])
 async def place_sell_order(order: OrderRequest) -> dict:
     """매도 주문을 제출한다."""
     return await submit_order(
@@ -97,7 +98,7 @@ async def list_orders(
     return await get_orders(status=status)
 
 
-@router.post("/cancel/{order_id}")
+@router.post("/cancel/{order_id}", dependencies=[Depends(verify_api_key)])
 async def cancel_order_endpoint(order_id: str) -> dict:
     """주문을 취소한다."""
     return await cancel_order(order_id)

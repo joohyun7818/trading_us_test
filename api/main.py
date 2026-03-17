@@ -2,13 +2,14 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.core.config import settings
 from api.core.database import close_pool, init_db
+from api.core.auth import verify_api_key
 from api.routers import alpaca, dashboard, macro, news, rag, performance, geopolitical
 from api.services.news_indexer import get_chroma_client
 from api.services.scheduler import get_scheduler, setup_scheduler
@@ -76,7 +77,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,7 +105,7 @@ async def ollama_status() -> dict:
     return await health_check()
 
 
-@app.post("/api/batch/run")
+@app.post("/api/batch/run", dependencies=[Depends(verify_api_key)])
 async def run_batch() -> dict:
     """전체 배치를 수동 실행한다."""
     from api.services.batch import run_full_batch
