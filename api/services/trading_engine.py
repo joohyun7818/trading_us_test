@@ -176,10 +176,54 @@ async def analyze_and_signal(
     }
 
 
-async def check_exit(symbol: str) -> Optional[dict]:
+async def _get_exit_thresholds() -> tuple[float, float]:
+    """settings 테이블에서 청산 임계값(손절/익절)을 로드한다."""
+    stop_loss_row = await fetch_one("SELECT value FROM settings WHERE key = 'stop_loss_pct'")
+    take_profit_row = await fetch_one("SELECT value FROM settings WHERE key = 'take_profit_pct'")
+
+    stop_loss_pct = float(stop_loss_row["value"]) if stop_loss_row else -8.0
+    take_profit_pct = float(take_profit_row["value"]) if take_profit_row else 15.0
+
+    if stop_loss_pct > 0:
+        stop_loss_pct = -abs(stop_loss_pct)
+    if take_profit_pct < 0:
+        take_profit_pct = abs(take_profit_pct)
+
+    return stop_loss_pct, take_profit_pct
+
+
+def _find_current_position(symbol: str, current_positions: list[dict]) -> Optional[dict]:
+    """실시간 포지션 목록에서 심볼 포지션을 찾는다."""
+    symbol_upper = symbol.upper()
+    for pos in current_positions:
+        if str(pos.get("symbol", "")).upper() == symbol_upper:
+            return pos
+    return None
+
+
+async def check_exit(symbol: str, current_positions: Optional[list[dict]] = None) -> Optional[dict]:
     """보유 종목의 청산 여부를 확인한다."""
-    position = await fetch_one("SELECT * FROM portfolio WHERE stock_symbol = $1", symbol)
-    if not position:
+    portfolio_position = await fetch_one(
+        "SELECT * FROM portfolio WHERE stock_symbol = $1", symbol
+    )
+
+    realtime_position = None
+    if current_positions is not None:
+        realtime_position = _find_current_position(symbol, current_positions)
+
+    if current_positions is not None and not realtime_position:
+        return None
+
+    if not portfolio_position and not realtime_position:
+        return None
+
+    qty = 0.0
+    if realtime_position and realtime_position.get("qty") is not None:
+        qty = float(realtime_position.get("qty") or 0)
+    elif portfolio_position and portfolio_position.get("qty") is not None:
+        qty = float(portfolio_position.get("qty") or 0)
+
+    if qty <= 0:
         return None
 
     numeric_result = await calculate_numeric_score(symbol)
@@ -190,24 +234,38 @@ async def check_exit(symbol: str) -> Optional[dict]:
             "symbol": symbol,
             "action": "SELL",
             "reason": f"Exit signal: numeric_score={score:.1f}",
-            "qty": float(position["qty"]),
+            "qty": qty,
+            "trigger_reason": "numeric_score",
         }
 
-    unrealized_pnl_pct = float(position.get("unrealized_pnl_pct", 0) or 0)
-    if unrealized_pnl_pct <= -8.0:
+    stop_loss_pct, take_profit_pct = await _get_exit_thresholds()
+
+    if realtime_position:
+        unrealized_plpc = float(realtime_position.get("unrealized_plpc", 0) or 0)
+        unrealized_pnl_pct = unrealized_plpc * 100
+    else:
+        unrealized_pnl_pct = float(portfolio_position.get("unrealized_pnl_pct", 0) or 0)
+
+    if unrealized_pnl_pct <= stop_loss_pct:
+        logger.warning(
+            "Stop-loss triggered for %s: pnl_pct=%.2f threshold=%.2f",
+            symbol, unrealized_pnl_pct, stop_loss_pct,
+        )
         return {
             "symbol": symbol,
             "action": "SELL",
             "reason": f"Stop-loss triggered: P&L={unrealized_pnl_pct:.2f}%",
-            "qty": float(position["qty"]),
+            "qty": qty,
+            "trigger_reason": "stop_loss",
         }
 
-    if unrealized_pnl_pct >= 15.0 and score <= 50:
+    if unrealized_pnl_pct >= take_profit_pct and score <= 50:
         return {
             "symbol": symbol,
             "action": "SELL",
             "reason": f"Take-profit: P&L={unrealized_pnl_pct:.2f}%, score={score:.1f}",
-            "qty": float(position["qty"]),
+            "qty": qty,
+            "trigger_reason": "take_profit",
         }
 
     return None
