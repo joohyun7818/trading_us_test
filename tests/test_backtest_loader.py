@@ -3,9 +3,12 @@ from unittest.mock import AsyncMock
 
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 
 from api.routers import backtest
+from api.services.backtester import BacktestConfig
 from api.services import historical_loader
+from api.services import backtester
 
 
 class _AcquireCtx:
@@ -98,3 +101,87 @@ async def test_backtest_router_status_calls_service(monkeypatch):
 
     assert result["total_symbols"] == 500
     status_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_backtester_runs_and_stores_result(monkeypatch):
+    rows = [
+        {
+            "symbol": "AAPL",
+            "trade_date": date(2026, 1, 2),
+            "open": 100.0,
+            "high": 103.0,
+            "low": 99.0,
+            "close": 102.0,
+            "rsi_14": 20.0,
+            "sma_20": 95.0,
+            "sma_60": 90.0,
+            "macd": 1.2,
+            "macd_signal": 0.5,
+            "macd_histogram": 0.7,
+            "bollinger_pct_b": 0.1,
+            "volume_ratio": 2.2,
+            "atr_14": 2.0,
+        },
+        {
+            "symbol": "AAPL",
+            "trade_date": date(2026, 1, 3),
+            "open": 101.0,
+            "high": 102.0,
+            "low": 90.0,
+            "close": 92.0,
+            "rsi_14": 35.0,
+            "sma_20": 96.0,
+            "sma_60": 91.0,
+            "macd": 0.6,
+            "macd_signal": 0.5,
+            "macd_histogram": 0.1,
+            "bollinger_pct_b": 0.4,
+            "volume_ratio": 1.1,
+            "atr_14": 2.5,
+        },
+    ]
+    monkeypatch.setattr(backtester, "fetch_all", AsyncMock(return_value=rows))
+
+    config = BacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 5), initial_capital=10_000)
+    payload = await backtester.run_backtest(config)
+
+    assert payload["backtest_id"]
+    assert payload["result"]["daily_equity"]
+    assert payload["result"]["signals"]
+    assert payload["result"]["trades"]
+
+    saved = await backtester.get_backtest_result(payload["backtest_id"])
+    assert saved == payload
+
+
+@pytest.mark.asyncio
+async def test_backtest_router_run_and_get_results(monkeypatch):
+    run_mock = AsyncMock(return_value={"backtest_id": "bt-1", "result": {"daily_equity": []}})
+    get_mock = AsyncMock(return_value={"backtest_id": "bt-1", "result": {"daily_equity": []}})
+    monkeypatch.setattr(backtest, "run_backtest", run_mock)
+    monkeypatch.setattr(backtest, "get_backtest_result", get_mock)
+
+    config = BacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+    run_result = await backtest.run_backtest_api(config)
+    get_result = await backtest.get_backtest_results("bt-1")
+
+    assert run_result["backtest_id"] == "bt-1"
+    assert get_result["backtest_id"] == "bt-1"
+    run_mock.assert_awaited_once()
+    get_mock.assert_awaited_once_with("bt-1")
+
+
+@pytest.mark.asyncio
+async def test_backtest_router_errors(monkeypatch):
+    monkeypatch.setattr(backtest, "run_backtest", AsyncMock(side_effect=ValueError("bad date range")))
+    monkeypatch.setattr(backtest, "get_backtest_result", AsyncMock(return_value=None))
+
+    config = BacktestConfig(start_date=date(2026, 1, 2), end_date=date(2026, 1, 1))
+    with pytest.raises(HTTPException) as run_exc:
+        await backtest.run_backtest_api(config)
+    with pytest.raises(HTTPException) as get_exc:
+        await backtest.get_backtest_results("missing")
+
+    assert run_exc.value.status_code == 400
+    assert get_exc.value.status_code == 404
