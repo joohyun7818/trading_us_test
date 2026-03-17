@@ -12,6 +12,7 @@ import finnhub
 
 from api.core.config import settings
 from api.core.database import execute, fetch_all, fetch_one
+from api.core.utils import run_sync
 from api.services.sentiment import analyze_sentiment_keywords
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,8 @@ async def _crawl_finnhub(symbols: list[str], batch_id: str) -> int:
 
     for symbol in symbols:
         try:
-            news_list = client.company_news(
+            news_list = await run_sync(
+                client.company_news,
                 symbol,
                 _from=(datetime.now(timezone.utc).strftime("%Y-%m-%d")),
                 to=(datetime.now(timezone.utc).strftime("%Y-%m-%d")),

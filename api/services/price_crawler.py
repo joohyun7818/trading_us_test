@@ -7,6 +7,7 @@ import pandas as pd
 import yfinance as yf
 
 from api.core.database import execute, fetch_all
+from api.core.utils import run_sync_yf_download
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,14 @@ async def crawl_prices(symbols: Optional[list[str]] = None) -> dict:
         batch = symbols[i : i + batch_size]
         tickers_str = " ".join(batch)
         try:
-            data = yf.download(tickers_str, period="1y", group_by="ticker", progress=False, threads=True)
+            data = await run_sync_yf_download(
+                yf.download,
+                tickers_str,
+                period="1y",
+                group_by="ticker",
+                progress=False,
+                threads=True,
+            )
         except Exception as e:
             logger.error("yfinance download failed for batch %d: %s", i, e)
             errors += len(batch)
