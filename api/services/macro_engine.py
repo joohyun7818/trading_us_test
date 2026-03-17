@@ -9,15 +9,109 @@ from api.core.database import execute, fetch_all, fetch_one
 
 logger = logging.getLogger(__name__)
 
+# 국제정세 가중치 추가 시 기존 가중치 재조정
 MACRO_WEIGHTS = {
-    "sp500_trend": 0.20,
-    "vix": 0.20,
-    "yield_curve": 0.15,
-    "market_rsi": 0.15,
-    "breadth": 0.10,
-    "put_call": 0.10,
+    "sp500_trend": 0.18,
+    "vix": 0.18,
+    "yield_curve": 0.13,
+    "market_rsi": 0.13,
+    "breadth": 0.08,
+    "put_call": 0.08,
     "macro_sentiment": 0.10,
+    "geopolitical": 0.12,  # 신규
 }
+
+
+async def _calc_geopolitical_score() -> float:
+    """geopolitical_regime의 최신 리스크를 0~1 매크로 점수로 변환한다.
+    높은 리스크 → 낮은 점수 (공포). STABLE → 0.7, CRISIS → 0.1"""
+    try:
+        from api.services.geopolitical_engine import calculate_geopolitical_regime
+        result = await calculate_geopolitical_regime()
+        composite = result.get("composite_risk", 0.0)
+        # composite_risk 0~1을 반전: 높은 리스크 = 낮은 매크로 점수
+        score = max(0.0, min(1.0, 1.0 - composite))
+        # 시장 영향 조정 적용
+        impact = result.get("market_sentiment_impact", 0.0)
+        score = max(0.0, min(1.0, score + impact))
+        return round(score, 4)
+    except Exception as e:
+        logger.error("Geopolitical score calc failed: %s", e)
+        return 0.5
+
+
+async def calculate_regime() -> dict:
+    """8개 매크로 지표 → regime_score → 레짐을 판단한다. (국제정세 포함)"""
+    sp500_trend = _calc_sp500_trend()
+    vix_score = _calc_vix_score()
+    yield_curve = _calc_yield_curve()
+    market_rsi = _calc_market_rsi()
+    breadth = _calc_breadth()
+    put_call = _calc_put_call()
+    macro_sentiment = await _calc_macro_sentiment()
+    geopolitical = await _calc_geopolitical_score()  # 신규
+
+    values = {
+        "sp500_trend": sp500_trend or 0.5,
+        "vix": vix_score or 0.5,
+        "yield_curve": yield_curve or 0.5,
+        "market_rsi": market_rsi or 0.5,
+        "breadth": breadth or 0.5,
+        "put_call": put_call or 0.5,
+        "macro_sentiment": macro_sentiment,
+        "geopolitical": geopolitical,  # 신규
+    }
+
+    regime_score = sum(values[k] * MACRO_WEIGHTS[k] for k in MACRO_WEIGHTS)
+    regime_score = round(max(0.0, min(1.0, regime_score)), 4)
+
+    if regime_score >= 0.8:
+        regime = "EXTREME_GREED"
+    elif regime_score >= 0.6:
+        regime = "GREED"
+    elif regime_score >= 0.4:
+        regime = "NEUTRAL"
+    elif regime_score >= 0.2:
+        regime = "FEAR"
+    else:
+        regime = "EXTREME_FEAR"
+
+    leveraged_action = await _evaluate_leveraged_action(regime, regime_score)
+
+    try:
+        await execute(
+            """
+            INSERT INTO macro_regime
+                (regime, regime_score, sp500_trend, vix_level,
+                 yield_curve_spread, market_rsi, market_breadth,
+                 put_call_ratio, macro_news_sentiment,
+                 geopolitical_risk, geopolitical_regime,
+                 leveraged_action)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            """,
+            regime, regime_score,
+            values["sp500_trend"], values["vix"],
+            values["yield_curve"], values["market_rsi"],
+            values["breadth"], values["put_call"],
+            values["macro_sentiment"],
+            values["geopolitical"],  # 신규
+            None,  # geopolitical_regime 문자열 (별도 조회 가능)
+            leveraged_action,
+        )
+    except Exception as e:
+        logger.error("Macro regime insert failed: %s", e)
+
+    logger.info(
+        "Macro regime: %s (%.4f) geo=%.4f action=%s",
+        regime, regime_score, geopolitical, leveraged_action,
+    )
+
+    return {
+        "regime": regime,
+        "regime_score": regime_score,
+        "indicators": values,
+        "leveraged_action": leveraged_action,
+    }
 
 
 def _calc_sp500_trend() -> Optional[float]:

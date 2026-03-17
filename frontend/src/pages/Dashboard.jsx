@@ -22,8 +22,8 @@ export default function Dashboard() {
         axios.get('/api/dashboard/signals?limit=20'),
         axios.get('/api/macro/regime'),
       ]);
-      setSummary(summaryRes.data);
-      setSignals(signalsRes.data);
+      setSummary(summaryRes.data || {});
+      setSignals(signalsRes.data || []);
       setMacro(macroRes.data);
       setError(null);
     } catch (err) {

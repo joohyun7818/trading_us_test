@@ -1,4 +1,3 @@
-# APScheduler 7개 작업 등록 (모닝, 클로즈, 뉴스, 매매, 매크로, RAG, SP500)
 import logging
 from typing import Optional
 
@@ -12,7 +11,6 @@ _scheduler: Optional[AsyncIOScheduler] = None
 
 
 def get_scheduler() -> AsyncIOScheduler:
-    """글로벌 스케줄러 인스턴스를 반환한다."""
     global _scheduler
     if _scheduler is None:
         _scheduler = AsyncIOScheduler(timezone="America/New_York")
@@ -20,7 +18,6 @@ def get_scheduler() -> AsyncIOScheduler:
 
 
 async def _morning_batch() -> None:
-    """08:00 모닝 배치: Step 0-4."""
     from api.services.batch import run_full_batch
     logger.info("Morning batch started")
     try:
@@ -31,7 +28,6 @@ async def _morning_batch() -> None:
 
 
 async def _close_batch() -> None:
-    """15:30 클로즈 배치: 포트폴리오 업데이트."""
     from api.services.alpaca_client import get_positions
     from api.core.database import execute
     logger.info("Close batch started")
@@ -64,7 +60,6 @@ async def _close_batch() -> None:
 
 
 async def _news_crawl() -> None:
-    """10분 주기 뉴스 수집."""
     from api.services.news_crawler import crawl_news_round_robin
     try:
         result = await crawl_news_round_robin()
@@ -74,7 +69,6 @@ async def _news_crawl() -> None:
 
 
 async def _auto_trade() -> None:
-    """5분 주기 자동매매."""
     from api.services.auto_trader import auto_trade_loop
     try:
         result = await auto_trade_loop()
@@ -84,7 +78,6 @@ async def _auto_trade() -> None:
 
 
 async def _macro_check() -> None:
-    """30분 주기 매크로 레짐 체크 + 레버리지 루프."""
     from api.services.macro_engine import calculate_regime
     from api.services.auto_trader import leveraged_loop
     try:
@@ -97,7 +90,6 @@ async def _macro_check() -> None:
 
 
 async def _rag_index() -> None:
-    """1시간 주기 RAG 인덱싱."""
     from api.services.news_indexer import index_unembedded_articles
     try:
         result = await index_unembedded_articles()
@@ -107,7 +99,6 @@ async def _rag_index() -> None:
 
 
 async def _sp500_weekly() -> None:
-    """주 1회 S&P 500 목록 갱신."""
     from api.services.sp500_loader import load_sp500
     try:
         result = await load_sp500()
@@ -116,10 +107,50 @@ async def _sp500_weekly() -> None:
         logger.error("SP500 weekly failed: %s", e)
 
 
+# ── 신규 작업 3개 ──
+
+async def _fulltext_crawl() -> None:
+    """30분 주기: 기사 원문 크롤링."""
+    from api.services.fulltext_crawler import crawl_fulltext_batch
+    try:
+        result = await crawl_fulltext_batch()
+        logger.info("Full-text crawl: %d crawled, %d success",
+                     result.get("attempted", 0), result.get("success", 0))
+    except Exception as e:
+        logger.error("Full-text crawl failed: %s", e)
+
+
+async def _gemini_index() -> None:
+    """1시간 주기: Gemini 임베딩 인덱싱."""
+    from api.services.gemini_indexer import index_with_gemini
+    try:
+        result = await index_with_gemini()
+        logger.info("Gemini index: %d embedded", result.get("embedded", 0))
+    except Exception as e:
+        logger.error("Gemini index failed: %s", e)
+
+
+async def _geopolitical_crawl() -> None:
+    """1시간 주기: 국제정세 뉴스 수집 + 레짐 계산."""
+    from api.services.geopolitical_engine import (
+        crawl_geopolitical_news,
+        calculate_geopolitical_regime,
+    )
+    try:
+        crawl_result = await crawl_geopolitical_news()
+        logger.info("Geopolitical crawl: %d events", crawl_result.get("new_events", 0))
+        regime_result = await calculate_geopolitical_regime()
+        logger.info("Geopolitical regime: %s (%.4f)",
+                     regime_result.get("risk_regime"), regime_result.get("composite_risk", 0))
+    except Exception as e:
+        logger.error("Geopolitical crawl failed: %s", e)
+
+
 def setup_scheduler() -> AsyncIOScheduler:
-    """7개 스케줄 작업을 등록하고 스케줄러를 반환한다."""
+    """10개 스케줄 작업을 등록하고 스케줄러를 반환한다."""
     scheduler = get_scheduler()
 
+    # 기존 7개
     scheduler.add_job(
         _morning_batch,
         CronTrigger(hour=8, minute=0, day_of_week="mon-fri"),
@@ -127,7 +158,6 @@ def setup_scheduler() -> AsyncIOScheduler:
         name="Morning Batch (Step 0-4)",
         replace_existing=True,
     )
-
     scheduler.add_job(
         _close_batch,
         CronTrigger(hour=15, minute=30, day_of_week="mon-fri"),
@@ -135,7 +165,6 @@ def setup_scheduler() -> AsyncIOScheduler:
         name="Close Batch (Portfolio Update)",
         replace_existing=True,
     )
-
     scheduler.add_job(
         _news_crawl,
         IntervalTrigger(minutes=10),
@@ -143,7 +172,6 @@ def setup_scheduler() -> AsyncIOScheduler:
         name="News Round-Robin Crawl (10min)",
         replace_existing=True,
     )
-
     scheduler.add_job(
         _auto_trade,
         IntervalTrigger(minutes=5),
@@ -151,7 +179,6 @@ def setup_scheduler() -> AsyncIOScheduler:
         name="Auto Trade Loop (5min)",
         replace_existing=True,
     )
-
     scheduler.add_job(
         _macro_check,
         IntervalTrigger(minutes=30),
@@ -159,7 +186,6 @@ def setup_scheduler() -> AsyncIOScheduler:
         name="Macro Regime Check (30min)",
         replace_existing=True,
     )
-
     scheduler.add_job(
         _rag_index,
         IntervalTrigger(hours=1),
@@ -167,7 +193,6 @@ def setup_scheduler() -> AsyncIOScheduler:
         name="RAG News Index (1hr)",
         replace_existing=True,
     )
-
     scheduler.add_job(
         _sp500_weekly,
         CronTrigger(day_of_week="sun", hour=20, minute=0),
@@ -176,5 +201,28 @@ def setup_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    logger.info("Scheduler setup complete: 7 jobs registered")
+    # 신규 3개
+    scheduler.add_job(
+        _fulltext_crawl,
+        IntervalTrigger(minutes=30),
+        id="fulltext_crawl",
+        name="Full Text Crawl (30min)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _gemini_index,
+        IntervalTrigger(hours=1),
+        id="gemini_index",
+        name="Gemini Embedding Index (1hr)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _geopolitical_crawl,
+        IntervalTrigger(hours=1),
+        id="geopolitical_crawl",
+        name="Geopolitical News Crawl (1hr)",
+        replace_existing=True,
+    )
+
+    logger.info("Scheduler setup complete: 10 jobs registered")
     return scheduler

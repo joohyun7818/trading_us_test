@@ -12,29 +12,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/news", tags=["news"])
 
 
-@router.get("/{symbol}")
-async def get_news_by_symbol(
-    symbol: str,
-    limit: int = Query(default=50, ge=1, le=200),
-    days: int = Query(default=7, ge=1, le=90),
-) -> list[dict]:
-    """종목별 뉴스 기사를 반환한다."""
-    rows = await fetch_all(
-        """
-        SELECT id, stock_symbol, title, body, source, url,
-               published_at, crawled_at, sentiment_score, sentiment_label,
-               is_priced_in, crawl_source
-        FROM news_articles
-        WHERE stock_symbol = $1
-          AND published_at > NOW() - ($2 || ' days')::INTERVAL
-        ORDER BY published_at DESC
-        LIMIT $3
-        """,
-        symbol, str(days), limit,
-    )
-    return rows
-
-
 @router.get("/sentiment/overview")
 async def get_sentiment_overview() -> dict:
     """전체 감성 분석 요약을 반환한다."""
@@ -119,4 +96,64 @@ async def get_backfill_progress() -> dict:
         "completed": completed,
         "errors": errors,
         "progress": progress,
+    }
+
+
+@router.get("/{symbol}")
+async def get_news_by_symbol(
+    symbol: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    days: int = Query(default=7, ge=1, le=90),
+) -> list[dict]:
+    """종목별 뉴스 기사를 반환한다."""
+    rows = await fetch_all(
+        """
+        SELECT id, stock_symbol, title, body, source, url,
+               published_at, crawled_at, sentiment_score, sentiment_label,
+               is_priced_in, crawl_source
+        FROM news_articles
+        WHERE stock_symbol = $1
+          AND published_at > NOW() - ($2 || ' days')::INTERVAL
+        ORDER BY published_at DESC
+        LIMIT $3
+        """,
+        symbol, str(days), limit,
+    )
+    return rows
+
+
+@router.post("/fulltext-crawl")
+async def trigger_fulltext_crawl() -> dict:
+    """기사 원문(full_text) 크롤링을 수동 실행한다."""
+    from api.services.fulltext_crawler import crawl_fulltext_batch
+    result = await crawl_fulltext_batch()
+    return result
+
+
+@router.post("/gemini-index")
+async def trigger_gemini_index() -> dict:
+    """Gemini 임베딩 인덱싱을 수동 실행한다."""
+    from api.services.gemini_indexer import index_with_gemini
+    result = await index_with_gemini()
+    return result
+
+
+@router.get("/fulltext/status")
+async def get_fulltext_status() -> dict:
+    """Full-text 크롤링 및 Gemini 임베딩 현황을 반환한다."""
+    total = await fetch_one("SELECT COUNT(*) as cnt FROM news_articles")
+    crawled = await fetch_one(
+        "SELECT COUNT(*) as cnt FROM news_articles WHERE full_text_crawled = TRUE"
+    )
+    has_fulltext = await fetch_one(
+        "SELECT COUNT(*) as cnt FROM news_articles WHERE full_text IS NOT NULL"
+    )
+    gemini_embedded = await fetch_one(
+        "SELECT COUNT(*) as cnt FROM news_articles WHERE gemini_embedded = TRUE"
+    )
+    return {
+        "total_articles": total["cnt"] if total else 0,
+        "fulltext_crawled": crawled["cnt"] if crawled else 0,
+        "has_fulltext": has_fulltext["cnt"] if has_fulltext else 0,
+        "gemini_embedded": gemini_embedded["cnt"] if gemini_embedded else 0,
     }

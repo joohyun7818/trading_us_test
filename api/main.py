@@ -1,4 +1,3 @@
-# FastAPI 앱, lifespan (DB init, ChromaDB init, 스케줄러), CORS, 라우터, SPA fallback
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -10,11 +9,9 @@ from fastapi.staticfiles import StaticFiles
 
 from api.core.config import settings
 from api.core.database import close_pool, init_db
-from api.routers import alpaca, dashboard, macro, news, rag, performance
+from api.routers import alpaca, dashboard, macro, news, rag, performance, geopolitical
 from api.services.news_indexer import get_chroma_client
 from api.services.scheduler import get_scheduler, setup_scheduler
-
-
 
 
 logging.basicConfig(
@@ -41,6 +38,14 @@ async def lifespan(app: FastAPI):
         logger.info("ChromaDB initialized")
     except Exception as e:
         logger.error("ChromaDB init failed: %s", e)
+
+    # Gemini 전용 ChromaDB 컬렉션
+    try:
+        from api.services.gemini_indexer import get_gemini_collection
+        get_gemini_collection()
+        logger.info("Gemini ChromaDB collection initialized")
+    except Exception as e:
+        logger.error("Gemini ChromaDB init failed: %s", e)
 
     try:
         scheduler = setup_scheduler()
@@ -83,6 +88,8 @@ app.include_router(alpaca.router)
 app.include_router(rag.router)
 app.include_router(macro.router)
 app.include_router(performance.router)
+app.include_router(geopolitical.router)
+
 
 @app.get("/api/health")
 async def health_check() -> dict:
@@ -102,7 +109,6 @@ async def run_batch() -> dict:
     """전체 배치를 수동 실행한다."""
     from api.services.batch import run_full_batch
     return await run_full_batch()
-
 
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")

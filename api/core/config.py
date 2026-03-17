@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     OLLAMA_TIMEOUT_EMBED: int = 60
     OLLAMA_TIMEOUT_VISION: int = 180
 
+    # ── Gemini ──────────────────────────────────────────────
+    GEMINI_API_KEY: str = ""
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
+    GEMINI_EMBED_DIM: int = 768
+    GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
+
     # ── Analysis ────────────────────────────────────────────
     ANALYSIS_MODE: str = "text_numeric"
 
