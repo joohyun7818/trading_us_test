@@ -1,5 +1,4 @@
 # 5분 자동매매 루프 + 30분 레버리지 루프
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -86,9 +85,7 @@ async def auto_trade_loop() -> dict:
         positions = await fetch_all("SELECT stock_symbol FROM portfolio")
         current_positions: Optional[list[dict]] = None
         try:
-            current_positions = await asyncio.to_thread(
-                lambda: asyncio.run(get_positions())
-            )
+            current_positions = await get_positions()
         except Exception as e:
             logger.warning(
                 "Failed to fetch Alpaca realtime positions, fallback to stale portfolio data: %s",

@@ -1,4 +1,5 @@
 # alpaca-py SDK 래퍼 - 계정/포지션/주문/가격 조회, 안전장치
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -67,7 +68,7 @@ async def get_positions() -> list[dict]:
     """현재 포지션 목록을 조회한다."""
     try:
         client = _get_trading_client()
-        positions = client.get_all_positions()
+        positions = await asyncio.to_thread(client.get_all_positions)
         result = []
         for pos in positions:
             result.append({

@@ -218,10 +218,10 @@ async def check_exit(symbol: str, current_positions: Optional[list[dict]] = None
         return None
 
     qty = 0.0
-    if realtime_position and realtime_position.get("qty") is not None:
-        qty = float(realtime_position.get("qty") or 0)
-    elif portfolio_position and portfolio_position.get("qty") is not None:
-        qty = float(portfolio_position.get("qty") or 0)
+    if realtime_position:
+        qty = float(realtime_position.get("qty", 0) or 0)
+    elif portfolio_position:
+        qty = float(portfolio_position.get("qty", 0) or 0)
 
     if qty <= 0:
         return None

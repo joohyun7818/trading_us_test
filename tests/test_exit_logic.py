@@ -7,7 +7,7 @@ from api.services.trading_engine import check_exit
 
 class TestCheckExitRealtime:
     @pytest.mark.asyncio
-    async def test_check_exit_uses_realtime_unrealized_plpc_for_stop_loss(self):
+    async def test_check_exit_uses_realtime_unrealized_pl_percentage_for_stop_loss(self):
         async def mock_fetch_one(query: str, *args):
             if "FROM portfolio" in query:
                 return {"stock_symbol": "AAPL", "qty": 1, "unrealized_pnl_pct": 2.0}
@@ -63,7 +63,7 @@ class TestAutoTradeLoopExit:
             return []
 
         with patch("api.services.auto_trader.fetch_all", new=AsyncMock(side_effect=mock_fetch_all)):
-            with patch("api.services.auto_trader.asyncio.to_thread", new=AsyncMock(return_value=[{"symbol": "AAPL", "qty": "5", "unrealized_plpc": "-0.10"}])):
+            with patch("api.services.auto_trader.get_positions", new=AsyncMock(return_value=[{"symbol": "AAPL", "qty": "5", "unrealized_plpc": "-0.10"}])):
                 with patch("api.services.auto_trader.check_exit", new=AsyncMock(return_value={
                     "symbol": "AAPL",
                     "action": "SELL",
