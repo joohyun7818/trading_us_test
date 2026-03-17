@@ -4,7 +4,7 @@ from typing import Optional
 from uuid import uuid4
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from api.core.database import fetch_all
 from api.services.numeric_analyzer import (
@@ -138,10 +138,7 @@ async def run_backtest(config: BacktestConfig) -> dict:
     df["numeric_score"] = numeric_scores
 
     trade_days = sorted(df["trade_date"].dt.date.unique())
-    next_day_map = {
-        day: trade_days[i + 1]
-        for i, day in enumerate(trade_days[:-1])
-    }
+    next_day_map = dict(zip(trade_days[:-1], trade_days[1:]))
     by_day = {day: group.copy() for day, group in df.groupby(df["trade_date"].dt.date)}
 
     cash = config.initial_capital
@@ -278,8 +275,11 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 notional = min(config.max_order_amount, cash)
                 if notional <= 0:
                     continue
+                close_px = float(row["close"])
+                if close_px <= 0:
+                    continue
                 pending_orders.setdefault(next_day, []).append(
-                    {"side": "BUY", "symbol": symbol, "qty": notional / float(row["close"])}
+                    {"side": "BUY", "symbol": symbol, "qty": notional / close_px}
                 )
             elif signal_type == "SELL" and symbol in positions:
                 pending_orders.setdefault(next_day, []).append(
