@@ -260,70 +260,6 @@ async def _calc_macro_sentiment() -> float:
     return 0.5
 
 
-async def calculate_regime() -> dict:
-    """7개 매크로 지표 → regime_score → 레짐을 판단한다."""
-    sp500_trend = _calc_sp500_trend()
-    vix_score = _calc_vix_score()
-    yield_curve = _calc_yield_curve()
-    market_rsi = _calc_market_rsi()
-    breadth = _calc_breadth()
-    put_call = _calc_put_call()
-    macro_sentiment = await _calc_macro_sentiment()
-
-    values = {
-        "sp500_trend": sp500_trend or 0.5,
-        "vix": vix_score or 0.5,
-        "yield_curve": yield_curve or 0.5,
-        "market_rsi": market_rsi or 0.5,
-        "breadth": breadth or 0.5,
-        "put_call": put_call or 0.5,
-        "macro_sentiment": macro_sentiment,
-    }
-
-    regime_score = sum(values[k] * MACRO_WEIGHTS[k] for k in MACRO_WEIGHTS)
-    regime_score = round(max(0.0, min(1.0, regime_score)), 4)
-
-    if regime_score >= 0.8:
-        regime = "EXTREME_GREED"
-    elif regime_score >= 0.6:
-        regime = "GREED"
-    elif regime_score >= 0.4:
-        regime = "NEUTRAL"
-    elif regime_score >= 0.2:
-        regime = "FEAR"
-    else:
-        regime = "EXTREME_FEAR"
-
-    leveraged_action = await _evaluate_leveraged_action(regime, regime_score)
-
-    try:
-        await execute(
-            """
-            INSERT INTO macro_regime
-                (regime, regime_score, sp500_trend, vix_level,
-                 yield_curve_spread, market_rsi, market_breadth,
-                 put_call_ratio, macro_news_sentiment, leveraged_action)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-            """,
-            regime, regime_score,
-            values["sp500_trend"], values["vix"],
-            values["yield_curve"], values["market_rsi"],
-            values["breadth"], values["put_call"],
-            values["macro_sentiment"], leveraged_action,
-        )
-    except Exception as e:
-        logger.error("Macro regime insert failed: %s", e)
-
-    logger.info("Macro regime: %s (%.4f) action=%s", regime, regime_score, leveraged_action)
-
-    return {
-        "regime": regime,
-        "regime_score": regime_score,
-        "indicators": values,
-        "leveraged_action": leveraged_action,
-    }
-
-
 async def _evaluate_leveraged_action(regime: str, regime_score: float) -> str:
     """레버리지 TQQQ/SQQQ 전략을 평가한다."""
     enabled_row = await fetch_one("SELECT value FROM settings WHERE key = 'leveraged_enabled'")
@@ -401,6 +337,7 @@ async def get_regime_history(limit: int = 30) -> list[dict]:
         SELECT regime, regime_score, sp500_trend, vix_level,
                yield_curve_spread, market_rsi, market_breadth,
                put_call_ratio, macro_news_sentiment,
+               geopolitical_risk, geopolitical_regime,
                leveraged_action, created_at
         FROM macro_regime
         ORDER BY created_at DESC
