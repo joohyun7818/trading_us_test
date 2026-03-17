@@ -83,9 +83,26 @@ async def auto_trade_loop() -> dict:
                 skipped += 1
 
         positions = await fetch_all("SELECT stock_symbol FROM portfolio")
+        current_positions: Optional[list[dict]] = None
+        try:
+            current_positions = await get_positions()
+        except Exception as e:
+            logger.warning(
+                "Failed to fetch Alpaca realtime positions, fallback to stale portfolio data: %s",
+                e,
+            )
+
+        if current_positions == [] and positions:
+            logger.warning(
+                "Alpaca realtime positions unavailable/empty, fallback to stale portfolio data"
+            )
+            current_positions = None
+
         exits = 0
         for pos in positions:
-            exit_signal = await check_exit(pos["stock_symbol"])
+            exit_signal = await check_exit(
+                pos["stock_symbol"], current_positions=current_positions
+            )
             if exit_signal:
                 result = await submit_order(
                     symbol=exit_signal["symbol"],
@@ -93,6 +110,23 @@ async def auto_trade_loop() -> dict:
                     side="sell",
                 )
                 if result.get("status") == "ok":
+                    if exit_signal.get("trigger_reason") == "stop_loss":
+                        logger.warning(
+                            "Stop-loss sell executed for %s: %s",
+                            exit_signal["symbol"], exit_signal["reason"],
+                        )
+                        try:
+                            await execute(
+                                "UPDATE trades SET trigger_reason = $1 WHERE order_id = $2",
+                                exit_signal["trigger_reason"],
+                                result.get("order_id"),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to persist trigger_reason for order %s: %s",
+                                result.get("order_id"),
+                                e,
+                            )
                     exits += 1
 
         logger.info("Auto-trade: executed=%d skipped=%d exits=%d", executed, skipped, exits)

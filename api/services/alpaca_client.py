@@ -1,4 +1,5 @@
 # alpaca-py SDK 래퍼 - 계정/포지션/주문/가격 조회, 안전장치
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
