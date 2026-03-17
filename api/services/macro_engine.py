@@ -6,6 +6,7 @@ from typing import Optional
 import yfinance as yf
 
 from api.core.database import execute, fetch_all, fetch_one
+from api.core.utils import run_sync
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,11 @@ async def _calc_geopolitical_score() -> float:
 
 async def calculate_regime() -> dict:
     """8개 매크로 지표 → regime_score → 레짐을 판단한다. (국제정세 포함)"""
-    sp500_trend = _calc_sp500_trend()
-    vix_score = _calc_vix_score()
-    yield_curve = _calc_yield_curve()
-    market_rsi = _calc_market_rsi()
-    breadth = _calc_breadth()
+    sp500_trend = await _calc_sp500_trend()
+    vix_score = await _calc_vix_score()
+    yield_curve = await _calc_yield_curve()
+    market_rsi = await _calc_market_rsi()
+    breadth = await _calc_breadth()
     put_call = _calc_put_call()
     macro_sentiment = await _calc_macro_sentiment()
     geopolitical = await _calc_geopolitical_score()  # 신규
@@ -114,11 +115,11 @@ async def calculate_regime() -> dict:
     }
 
 
-def _calc_sp500_trend() -> Optional[float]:
+async def _calc_sp500_trend() -> Optional[float]:
     """S&P 500 트렌드 점수를 계산한다 (0-1, 1=강세)."""
     try:
         spy = yf.Ticker("SPY")
-        hist = spy.history(period="3mo")
+        hist = await run_sync(spy.history, period="3mo")
         if hist.empty or len(hist) < 20:
             return None
         closes = hist["Close"]
@@ -140,11 +141,11 @@ def _calc_sp500_trend() -> Optional[float]:
         return None
 
 
-def _calc_vix_score() -> Optional[float]:
+async def _calc_vix_score() -> Optional[float]:
     """VIX를 0-1 점수로 변환한다 (높은 VIX = 낮은 점수 = 공포)."""
     try:
         vix = yf.Ticker("^VIX")
-        hist = vix.history(period="5d")
+        hist = await run_sync(vix.history, period="5d")
         if hist.empty:
             return None
         vix_val = float(hist["Close"].iloc[-1])
@@ -167,13 +168,13 @@ def _calc_vix_score() -> Optional[float]:
         return None
 
 
-def _calc_yield_curve() -> Optional[float]:
+async def _calc_yield_curve() -> Optional[float]:
     """수익률 곡선 스프레드 점수 (0-1)."""
     try:
         tnx = yf.Ticker("^TNX")
         irx = yf.Ticker("^IRX")
-        tnx_hist = tnx.history(period="5d")
-        irx_hist = irx.history(period="5d")
+        tnx_hist = await run_sync(tnx.history, period="5d")
+        irx_hist = await run_sync(irx.history, period="5d")
         if tnx_hist.empty or irx_hist.empty:
             return 0.5
         ten_year = float(tnx_hist["Close"].iloc[-1])
@@ -194,11 +195,11 @@ def _calc_yield_curve() -> Optional[float]:
         return None
 
 
-def _calc_market_rsi() -> Optional[float]:
+async def _calc_market_rsi() -> Optional[float]:
     """S&P 500 RSI를 0-1 점수로 변환한다."""
     try:
         spy = yf.Ticker("SPY")
-        hist = spy.history(period="3mo")
+        hist = await run_sync(spy.history, period="3mo")
         if hist.empty or len(hist) < 15:
             return None
         closes = hist["Close"]
@@ -218,11 +219,11 @@ def _calc_market_rsi() -> Optional[float]:
         return None
 
 
-def _calc_breadth() -> Optional[float]:
+async def _calc_breadth() -> Optional[float]:
     """시장 너비 (NYSE advance/decline 근사)."""
     try:
         spy = yf.Ticker("SPY")
-        hist = spy.history(period="1mo")
+        hist = await run_sync(spy.history, period="1mo")
         if hist.empty or len(hist) < 10:
             return None
         closes = hist["Close"]
@@ -310,7 +311,7 @@ async def _check_leveraged_exit(positions: list[dict]) -> str:
 
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d")
+            hist = await run_sync(ticker.history, period="1d")
             if not hist.empty:
                 current_price = float(hist["Close"].iloc[-1])
             else:

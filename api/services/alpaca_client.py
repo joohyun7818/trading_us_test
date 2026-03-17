@@ -11,6 +11,7 @@ from alpaca.data.requests import StockLatestQuoteRequest
 
 from api.core.config import settings
 from api.core.database import execute, fetch_one, fetch_all
+from api.core.utils import run_sync
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ async def get_account() -> dict:
     """Alpaca 계정 정보를 조회한다."""
     try:
         client = _get_trading_client()
-        account = client.get_account()
+        account = await run_sync(client.get_account)
         return {
             "status": "ok",
             "buying_power": str(account.buying_power),
@@ -67,7 +68,7 @@ async def get_positions() -> list[dict]:
     """현재 포지션 목록을 조회한다."""
     try:
         client = _get_trading_client()
-        positions = client.get_all_positions()
+        positions = await run_sync(client.get_all_positions)
         result = []
         for pos in positions:
             result.append({
@@ -167,7 +168,7 @@ async def submit_order(
                 time_in_force=TimeInForce.DAY,
             )
 
-        order = client.submit_order(req)
+        order = await run_sync(client.submit_order, req)
 
         await execute(
             """
@@ -198,7 +199,7 @@ async def cancel_order(order_id: str) -> dict:
     """주문을 취소한다."""
     try:
         client = _get_trading_client()
-        client.cancel_order_by_id(order_id)
+        await run_sync(client.cancel_order_by_id, order_id)
         await execute(
             "UPDATE trades SET status = 'cancelled', updated_at = NOW() WHERE order_id = $1",
             order_id,
@@ -222,7 +223,7 @@ async def get_orders(status: str = "open") -> list[dict]:
             "all": QueryOrderStatus.ALL,
         }
         req = GetOrdersRequest(status=status_map.get(status, QueryOrderStatus.OPEN))
-        orders = client.get_orders(req)
+        orders = await run_sync(client.get_orders, req)
         result = []
         for o in orders:
             result.append({
@@ -245,7 +246,7 @@ async def get_latest_price(symbol: str) -> Optional[float]:
     try:
         client = _get_data_client()
         req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
-        quotes = client.get_stock_latest_quote(req)
+        quotes = await run_sync(client.get_stock_latest_quote, req)
         if symbol in quotes:
             return float(quotes[symbol].ask_price)
     except Exception as e:

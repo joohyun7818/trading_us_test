@@ -10,6 +10,7 @@ import pandas as pd
 import yfinance as yf
 
 from api.core.database import execute, fetch_one
+from api.core.utils import run_sync
 from api.services.ollama_client import generate_with_image
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ async def analyze_chart(symbol: str) -> Optional[dict]:
         logger.info("Cache hit for visual analysis of %s", symbol)
         return cached
 
-    chart_bytes = _generate_candlestick_chart(symbol)
+    chart_bytes = await run_sync(_generate_candlestick_chart, symbol)
     if chart_bytes is None:
         return None
 
