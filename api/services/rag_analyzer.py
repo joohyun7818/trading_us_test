@@ -4,6 +4,9 @@ import re
 import logging
 from typing import Optional
 
+from pydantic import ValidationError
+
+from api.services.models.analysis_models import MacroAnalysisResult, RAGAnalysisResult
 from api.services.ollama_client import generate
 from api.services.rag_engine import search_and_build_prompt, search_similar_news
 
@@ -124,7 +127,18 @@ async def analyze_stock(
                 "rationale": "Analysis could not be completed",
             }
 
-        return result
+        # Validate with Pydantic model
+        try:
+            validated = RAGAnalysisResult(**result)
+            return validated.model_dump()
+        except ValidationError as e:
+            logger.warning(
+                "Validation failed for %s: %s. Original values: %s",
+                symbol,
+                e.errors(),
+                result,
+            )
+            return _DEFAULT_RESULT
 
     except Exception as e:
         logger.error("RAG stock analysis failed for %s: %s", symbol, e)
@@ -185,7 +199,24 @@ JSON: {{"regime":"<EXTREME_FEAR|FEAR|NEUTRAL|GREED|EXTREME_GREED>","regime_score
                 "rationale": "Macro analysis could not be completed",
             }
 
-        return result
+        # Validate with Pydantic model
+        try:
+            validated = MacroAnalysisResult(**result)
+            return validated.model_dump()
+        except ValidationError as e:
+            logger.warning(
+                "Macro validation failed: %s. Original values: %s",
+                e.errors(),
+                result,
+            )
+            return {
+                "regime": "NEUTRAL",
+                "regime_score": 0.5,
+                "confidence": 0.0,
+                "key_factors": [],
+                "outlook": "neutral",
+                "rationale": "Macro analysis could not be completed",
+            }
 
     except Exception as e:
         logger.error("RAG macro analysis failed: %s", e)
