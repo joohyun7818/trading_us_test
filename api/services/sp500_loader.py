@@ -60,7 +60,7 @@ async def _get_market_cap(symbol: str) -> Optional[int]:
     """yfinance로 시가총액을 조회한다."""
     try:
         ticker = yf.Ticker(symbol)
-        info = await run_sync(lambda: ticker.info)
+        info = await run_sync(getattr, ticker, "info")
         return info.get("marketCap")
     except Exception:
         return None

@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Callable, TypeVar
@@ -6,6 +7,7 @@ from typing import Any, Callable, TypeVar
 T = TypeVar("T")
 
 _YF_DOWNLOAD_EXECUTOR = ThreadPoolExecutor(max_workers=5)
+atexit.register(_YF_DOWNLOAD_EXECUTOR.shutdown, wait=False, cancel_futures=True)
 
 
 async def run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
