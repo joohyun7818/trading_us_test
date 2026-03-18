@@ -7,6 +7,7 @@ from api.core.database import execute, fetch_all, fetch_one
 from api.services.alpaca_client import get_positions, submit_order, get_latest_price
 from api.services.exit_manager import evaluate_exit
 from api.services.macro_engine import calculate_regime
+from api.services.position_sizer import calculate_position_size
 from api.services.trading_engine import analyze_and_signal
 
 logger = logging.getLogger(__name__)
@@ -45,17 +46,86 @@ async def auto_trade_loop() -> dict:
                 skipped += 1
                 continue
 
-            max_amount_row = await fetch_one("SELECT value FROM settings WHERE key = 'max_order_amount'")
-            max_amount = float(max_amount_row["value"]) if max_amount_row else 1000.0
-
-            price = await get_latest_price(symbol)
-            if not price or price <= 0:
-                logger.warning("No price for %s, skip", symbol)
-                skipped += 1
-                continue
-
             if signal_type == "BUY":
-                qty = max(1, int(max_amount / price))
+                # ATR 기반 포지션 사이징 사용 여부 확인
+                use_atr_sizing_row = await fetch_one(
+                    "SELECT value FROM settings WHERE key = 'use_atr_sizing'"
+                )
+                use_atr_sizing = (
+                    use_atr_sizing_row and use_atr_sizing_row["value"].lower() == "true"
+                ) if use_atr_sizing_row else False
+
+                if use_atr_sizing:
+                    # 계좌 자산 조회
+                    total_capital_row = await fetch_one(
+                        "SELECT value FROM settings WHERE key = 'total_capital'"
+                    )
+                    account_equity = (
+                        float(total_capital_row["value"]) if total_capital_row else 100000.0
+                    )
+
+                    # 최대 포지션 수 조회
+                    max_pos_row = await fetch_one(
+                        "SELECT value FROM settings WHERE key = 'max_positions'"
+                    )
+                    max_positions = int(max_pos_row["value"]) if max_pos_row else 20
+
+                    # 현재 포지션 조회
+                    current_positions = await fetch_all(
+                        """
+                        SELECT stock_symbol, qty, avg_price
+                        FROM portfolio
+                        """
+                    )
+
+                    # 포지션 사이징 계산
+                    final_score = sig.get("final_score", 50.0)
+                    sizing_result = await calculate_position_size(
+                        symbol=symbol,
+                        signal_score=final_score,
+                        account_equity=account_equity,
+                        current_positions=current_positions,
+                        max_positions=max_positions,
+                    )
+
+                    order_amount = sizing_result.get("order_amount", 0.0)
+                    qty = sizing_result.get("quantity", 0)
+                    sizing_reason = sizing_result.get("sizing_reason", "unknown")
+
+                    if order_amount <= 0 or qty <= 0:
+                        logger.info(
+                            "Skip BUY %s: order_amount=%.2f qty=%d reason=%s",
+                            symbol,
+                            order_amount,
+                            qty,
+                            sizing_reason,
+                        )
+                        skipped += 1
+                        continue
+
+                    logger.info(
+                        "ATR-based sizing for %s: amount=%.2f qty=%d atr=%.4f reason=%s",
+                        symbol,
+                        order_amount,
+                        qty,
+                        sizing_result.get("atr_14", 0.0),
+                        sizing_reason,
+                    )
+                else:
+                    # 기존 고정 금액 방식
+                    max_amount_row = await fetch_one(
+                        "SELECT value FROM settings WHERE key = 'max_order_amount'"
+                    )
+                    max_amount = float(max_amount_row["value"]) if max_amount_row else 1000.0
+
+                    price = await get_latest_price(symbol)
+                    if not price or price <= 0:
+                        logger.warning("No price for %s, skip", symbol)
+                        skipped += 1
+                        continue
+
+                    qty = max(1, int(max_amount / price))
+
                 result = await submit_order(
                     symbol=symbol, qty=qty, side="buy", signal_id=signal_id,
                 )

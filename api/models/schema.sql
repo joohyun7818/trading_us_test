@@ -302,7 +302,13 @@ CREATE INDEX IF NOT EXISTS idx_bl_created_at ON batch_logs (created_at);
          , ('hard_stop_atr_mult', '2.5', 'ATR 하드 스탑 배수')
          , ('trailing_stop_atr_mult', '2.0', 'ATR 트레일링 스탑 배수')
          , ('max_holding_days', '20', '최대 보유일')
-         , ('partial_exit_atr_mult', '3.0', '부분 익절 ATR 배수') ON CONFLICT (key) DO NOTHING;
+         , ('partial_exit_atr_mult', '3.0', '부분 익절 ATR 배수')
+         , ('use_atr_sizing', 'false', 'ATR 기반 포지션 사이징 사용')
+         , ('risk_per_trade_pct', '1.0', '거래당 리스크 비율 (%)')
+         , ('max_single_order_pct', '5.0', '단일 주문 최대 비율 (%)')
+         , ('sector_cap_pct', '30.0', '섹터별 최대 노출 비율 (%)')
+         , ('min_order_amount', '200', '최소 주문 금액 USD')
+         , ('max_positions', '20', '최대 동시 보유 포지션 수') ON CONFLICT (key) DO NOTHING;
 
 -- ============================================================
 -- 시그널 성과 추적 테이블
