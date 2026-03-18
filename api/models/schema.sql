@@ -131,6 +131,8 @@ CREATE INDEX IF NOT EXISTS idx_signals_executed ON signals (executed);
         , status VARCHAR (20) DEFAULT 'pending'
         , signal_id INTEGER REFERENCES signals (id)
         , pnl NUMERIC(12, 4)
+        , exit_reason VARCHAR (30)
+        , entry_atr FLOAT
         , created_at TIMESTAMPTZ DEFAULT NOW()
         , updated_at TIMESTAMPTZ DEFAULT NOW()
           );
@@ -152,6 +154,8 @@ CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades (created_at);
         , current_price NUMERIC(12, 4)
         , unrealized_pnl NUMERIC(12, 4)
         , unrealized_pnl_pct NUMERIC(8, 4)
+        , highest_price FLOAT
+        , entry_atr FLOAT
         , updated_at TIMESTAMPTZ DEFAULT NOW()
           );
 
@@ -292,9 +296,13 @@ CREATE INDEX IF NOT EXISTS idx_bl_created_at ON batch_logs (created_at);
         , ('max_order_amount', '1000', '1회 최대 주문 USD')
         , ('daily_order_limit', '50', '일일 최대 주문 수')
         , ('max_exposure_pct', '0.70', '총 투자 한도 비율')
-        , ('news_round_robin_size', '50', '뉴스 1회 종목 수')
-        , ('news_interval_minutes', '10', '뉴스 수집 간격 분')
-        , ('backfill_years', '2', '백필 기간 년') ON CONFLICT (key) DO NOTHING;
+         , ('news_round_robin_size', '50', '뉴스 1회 종목 수')
+         , ('news_interval_minutes', '10', '뉴스 수집 간격 분')
+         , ('backfill_years', '2', '백필 기간 년')
+         , ('hard_stop_atr_mult', '2.5', 'ATR 하드 스탑 배수')
+         , ('trailing_stop_atr_mult', '2.0', 'ATR 트레일링 스탑 배수')
+         , ('max_holding_days', '20', '최대 보유일')
+         , ('partial_exit_atr_mult', '3.0', '부분 익절 ATR 배수') ON CONFLICT (key) DO NOTHING;
 
 -- ============================================================
 -- 시그널 성과 추적 테이블

@@ -5,8 +5,9 @@ from typing import Optional
 
 from api.core.database import execute, fetch_all, fetch_one
 from api.services.alpaca_client import get_positions, submit_order, get_latest_price
+from api.services.exit_manager import evaluate_exit
 from api.services.macro_engine import calculate_regime
-from api.services.trading_engine import analyze_and_signal, check_exit
+from api.services.trading_engine import analyze_and_signal
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,16 @@ async def auto_trade_loop() -> dict:
                 logger.warning("Order failed for %s: %s", symbol, result.get("error"))
                 skipped += 1
 
-        positions = await fetch_all("SELECT stock_symbol FROM portfolio")
+        try:
+            positions = await fetch_all(
+                """
+                SELECT stock_symbol, qty, avg_price, highest_price, entry_atr
+                FROM portfolio
+                """
+            )
+        except Exception:
+            logger.warning("portfolio.highest_price/entry_atr column missing, using fallback query")
+            positions = await fetch_all("SELECT stock_symbol, qty, avg_price FROM portfolio")
         current_positions: Optional[list[dict]] = None
         try:
             current_positions = await get_positions()
@@ -100,33 +110,130 @@ async def auto_trade_loop() -> dict:
 
         exits = 0
         for pos in positions:
-            exit_signal = await check_exit(
-                pos["stock_symbol"], current_positions=current_positions
+            symbol = pos["stock_symbol"]
+            realtime_position = None
+            for rt_pos in (current_positions or []):
+                if str(rt_pos.get("symbol", "")).upper() == str(symbol).upper():
+                    realtime_position = rt_pos
+                    break
+
+            qty = float(realtime_position.get("qty", 0) or 0) if realtime_position else float(pos.get("qty", 0) or 0)
+            if qty <= 0:
+                continue
+
+            current_price = (
+                float(realtime_position.get("current_price", 0) or 0) if realtime_position else 0.0
             )
-            if exit_signal:
+            if current_price <= 0:
+                current_price = await get_latest_price(symbol)
+            if not current_price or current_price <= 0:
+                continue
+
+            entry_price = (
+                float(realtime_position.get("avg_entry_price", 0) or 0)
+                if realtime_position
+                else float(pos.get("avg_price", 0) or 0)
+            )
+            if entry_price <= 0:
+                entry_price = current_price
+
+            highest_price = float(pos.get("highest_price", 0) or 0)
+            if highest_price <= 0:
+                highest_price = current_price
+            else:
+                highest_price = max(highest_price, current_price)
+
+            entry_atr = float(pos.get("entry_atr", 0) or 0)
+            if entry_atr <= 0:
+                trade_entry = await fetch_one(
+                    """
+                    SELECT entry_atr, created_at
+                    FROM trades
+                    WHERE stock_symbol = $1
+                      AND LOWER(side) = 'buy'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    symbol,
+                )
+                if trade_entry:
+                    entry_atr = float(trade_entry.get("entry_atr", 0) or 0)
+                    entry_dt = trade_entry.get("created_at")
+                else:
+                    entry_dt = None
+            else:
+                trade_entry = await fetch_one(
+                    """
+                    SELECT created_at
+                    FROM trades
+                    WHERE stock_symbol = $1
+                      AND LOWER(side) = 'buy'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    symbol,
+                )
+                entry_dt = trade_entry.get("created_at") if trade_entry else None
+
+            if entry_atr <= 0:
+                entry_atr = entry_price * 0.02
+
+            days_held = 0
+            if entry_dt:
+                if isinstance(entry_dt, datetime):
+                    entry_date = entry_dt.date()
+                else:
+                    entry_date = entry_dt
+                days_held = max(0, (datetime.now(timezone.utc).date() - entry_date).days)
+
+            try:
+                await execute(
+                    """
+                    UPDATE portfolio
+                    SET highest_price = $1,
+                        entry_atr = COALESCE(entry_atr, $2)
+                    WHERE stock_symbol = $3
+                    """,
+                    highest_price,
+                    entry_atr,
+                    symbol,
+                )
+            except Exception:
+                logger.debug("Skip portfolio highest_price/entry_atr update for %s", symbol)
+
+            exit_signal = await evaluate_exit(
+                {
+                    "symbol": symbol,
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "highest_price_since_entry": highest_price,
+                    "days_held": days_held,
+                    "entry_atr": entry_atr,
+                    "quantity": qty,
+                }
+            )
+            if exit_signal.get("should_exit"):
+                sell_qty = min(qty, float(exit_signal.get("exit_quantity", 0) or 0))
+                if sell_qty <= 0:
+                    continue
                 result = await submit_order(
-                    symbol=exit_signal["symbol"],
-                    qty=exit_signal["qty"],
+                    symbol=symbol,
+                    qty=sell_qty,
                     side="sell",
                 )
                 if result.get("status") == "ok":
-                    if exit_signal.get("trigger_reason") == "stop_loss":
-                        logger.warning(
-                            "Stop-loss sell executed for %s: %s",
-                            exit_signal["symbol"], exit_signal["reason"],
+                    try:
+                        await execute(
+                            "UPDATE trades SET exit_reason = $1 WHERE order_id = $2",
+                            exit_signal.get("exit_reason"),
+                            result.get("order_id"),
                         )
-                        try:
-                            await execute(
-                                "UPDATE trades SET trigger_reason = $1 WHERE order_id = $2",
-                                exit_signal["trigger_reason"],
-                                result.get("order_id"),
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "Failed to persist trigger_reason for order %s: %s",
-                                result.get("order_id"),
-                                e,
-                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to persist exit_reason for order %s: %s",
+                            result.get("order_id"),
+                            e,
+                        )
                     exits += 1
 
         logger.info("Auto-trade: executed=%d skipped=%d exits=%d", executed, skipped, exits)
