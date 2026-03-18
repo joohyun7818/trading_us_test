@@ -448,10 +448,10 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 # ATR 기반 포지션 사이징 또는 고정 금액
                 if config.use_atr_sizing:
                     atr_14 = float(row["atr_14"]) if pd.notna(row.get("atr_14")) else None
-                    close_prices = day_df["close"].astype(float).to_dict()
                     current_equity = cash + sum(
-                        float(p["qty"]) * close_prices.get(s, 0.0)
+                        float(p["qty"]) * float(day_df.at[s, "close"])
                         for s, p in positions.items()
+                        if s in day_df.index
                     )
                     notional = _calculate_atr_position_size(
                         final_score=final_score,
@@ -466,18 +466,20 @@ async def run_backtest(config: BacktestConfig) -> dict:
                         continue
 
                     symbol_sector_id = row["sector_id"] if "sector_id" in row.index else None
-                    notional = _apply_sector_cap_in_backtest(
-                        symbol=symbol,
-                        symbol_sector_id=symbol_sector_id,
-                        positions=positions,
-                        close_prices=close_prices,
-                        account_equity=current_equity,
-                        requested_notional=notional,
-                        config=config,
-                    )
-                    if notional <= 0:
-                        logger.debug("Skip BUY %s on %s: sector cap reached", symbol, day)
-                        continue
+                    if symbol_sector_id is not None and not pd.isna(symbol_sector_id):
+                        close_prices = day_df["close"].astype(float).to_dict()
+                        notional = _apply_sector_cap_in_backtest(
+                            symbol=symbol,
+                            symbol_sector_id=symbol_sector_id,
+                            positions=positions,
+                            close_prices=close_prices,
+                            account_equity=current_equity,
+                            requested_notional=notional,
+                            config=config,
+                        )
+                        if notional <= 0:
+                            logger.debug("Skip BUY %s on %s: sector cap reached", symbol, day)
+                            continue
                     notional = min(notional, cash)
                 else:
                     notional = min(config.max_order_amount, cash)
