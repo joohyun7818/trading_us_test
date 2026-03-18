@@ -39,6 +39,11 @@ class BacktestConfig(BaseModel):
     slippage_bps: float = 5.0
     text_score_default: float = 50.0
     macro_score_default: float = 50.0
+    exit_strategy: str = "fixed"
+    hard_stop_atr_mult: float = 2.5
+    trailing_stop_atr_mult: float = 2.0
+    max_holding_days: int = 20
+    partial_exit_atr_mult: float = 3.0
 
 
 class BacktestResult(BaseModel):
@@ -101,6 +106,43 @@ def _apply_adjustments(score: float, rsi_14: Optional[float]) -> tuple[float, li
 
 def _apply_slippage(open_px: float, slippage_bps: float) -> float:
     return open_px * (1 + slippage_bps / 10000.0)
+
+
+def _evaluate_dynamic_exit_inline(
+    *,
+    entry_price: float,
+    current_price: float,
+    highest_price_since_entry: float,
+    days_held: int,
+    entry_atr: float,
+    quantity: float,
+    hard_stop_mult: float,
+    trail_mult: float,
+    max_holding_days: int,
+    partial_mult: float,
+) -> dict:
+    """백테스트 전용 동적 청산 규칙(동기/순수 함수)을 평가한다."""
+    safe_atr = entry_atr if entry_atr > 0 else entry_price * 0.02
+    full_exit_qty = max(1, int(quantity))
+    partial_exit_qty = max(1, int(quantity * 0.5))
+
+    hard_stop_price = entry_price - (safe_atr * hard_stop_mult)
+    if current_price <= hard_stop_price:
+        return {"should_exit": True, "exit_reason": "atr_hard_stop", "exit_quantity": full_exit_qty}
+
+    if highest_price_since_entry > (entry_price * 1.01):
+        trailing_stop_price = highest_price_since_entry - (safe_atr * trail_mult)
+        if current_price <= trailing_stop_price:
+            return {"should_exit": True, "exit_reason": "trailing_stop", "exit_quantity": full_exit_qty}
+
+    if days_held >= max_holding_days:
+        return {"should_exit": True, "exit_reason": "time_limit", "exit_quantity": full_exit_qty}
+
+    atr_multiple = (current_price - entry_price) / safe_atr if safe_atr > 0 else 0.0
+    if atr_multiple >= partial_mult and quantity > 1:
+        return {"should_exit": True, "exit_reason": "partial_take_profit", "exit_quantity": partial_exit_qty}
+
+    return {"should_exit": False, "exit_reason": "hold", "exit_quantity": 0}
 
 
 async def run_backtest(config: BacktestConfig) -> dict:
@@ -170,7 +212,19 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 if cost > cash:
                     continue
                 cash -= cost
-                positions[symbol] = {"qty": qty, "entry_price": fill_px, "entry_date": day}
+                entry_atr_raw = day_df.at[symbol, "atr_14"] if "atr_14" in day_df.columns else None
+                entry_atr = (
+                    float(entry_atr_raw)
+                    if entry_atr_raw is not None and pd.notna(entry_atr_raw)
+                    else float(fill_px) * 0.02
+                )
+                positions[symbol] = {
+                    "qty": qty,
+                    "entry_price": fill_px,
+                    "entry_date": day,
+                    "highest_price": float(day_df.at[symbol, "high"]),
+                    "entry_atr": entry_atr,
+                }
             elif order["side"] == "SELL" and symbol in positions:
                 pos = positions.pop(symbol)
                 qty = float(pos["qty"])
@@ -186,6 +240,7 @@ async def run_backtest(config: BacktestConfig) -> dict:
                         "side": "LONG",
                         "pnl": round(pnl, 4),
                         "return_pct": round(ret, 4),
+                        "exit_reason": order.get("exit_reason", "signal_sell"),
                     }
                 )
 
@@ -197,21 +252,46 @@ async def run_backtest(config: BacktestConfig) -> dict:
             entry_px = float(pos["entry_price"])
             low_px = float(day_df.at[symbol, "low"])
             high_px = float(day_df.at[symbol, "high"])
+            close_px = float(day_df.at[symbol, "close"])
+            pos["highest_price"] = max(float(pos.get("highest_price", entry_px)), high_px)
 
-            stop_px = entry_px * (1 + config.stop_loss_pct / 100.0)
-            tp_px = entry_px * (1 + config.take_profit_pct / 100.0)
             exit_px = None
+            exit_qty = qty
+            exit_reason = "hold"
 
-            if low_px <= stop_px:
-                exit_px = stop_px
-            elif high_px >= tp_px:
-                exit_px = tp_px
+            if config.exit_strategy == "dynamic":
+                days_held = max(0, (day - pos["entry_date"]).days)
+                dynamic_result = _evaluate_dynamic_exit_inline(
+                    entry_price=entry_px,
+                    current_price=close_px,
+                    highest_price_since_entry=float(pos.get("highest_price", high_px)),
+                    days_held=days_held,
+                    entry_atr=float(pos.get("entry_atr", entry_px * 0.02)),
+                    quantity=qty,
+                    hard_stop_mult=config.hard_stop_atr_mult,
+                    trail_mult=config.trailing_stop_atr_mult,
+                    max_holding_days=config.max_holding_days,
+                    partial_mult=config.partial_exit_atr_mult,
+                )
+                if dynamic_result["should_exit"]:
+                    exit_px = close_px
+                    exit_qty = min(qty, float(dynamic_result["exit_quantity"]))
+                    exit_reason = dynamic_result["exit_reason"]
+            else:
+                stop_px = entry_px * (1 + config.stop_loss_pct / 100.0)
+                tp_px = entry_px * (1 + config.take_profit_pct / 100.0)
+                if low_px <= stop_px:
+                    exit_px = stop_px
+                    exit_reason = "stop_loss"
+                elif high_px >= tp_px:
+                    exit_px = tp_px
+                    exit_reason = "take_profit"
 
-            if exit_px is not None:
-                proceeds = qty * exit_px
+            if exit_px is not None and exit_qty > 0:
+                proceeds = exit_qty * exit_px
                 cash += proceeds
-                pnl = proceeds - (qty * entry_px)
-                ret = (pnl / (qty * entry_px)) * 100 if entry_px else 0.0
+                pnl = proceeds - (exit_qty * entry_px)
+                ret = (pnl / (exit_qty * entry_px)) * 100 if entry_px else 0.0
                 trades.append(
                     {
                         "entry_date": pos["entry_date"],
@@ -220,9 +300,14 @@ async def run_backtest(config: BacktestConfig) -> dict:
                         "side": "LONG",
                         "pnl": round(pnl, 4),
                         "return_pct": round(ret, 4),
+                        "exit_reason": exit_reason,
                     }
                 )
-                positions.pop(symbol, None)
+                remaining_qty = qty - exit_qty
+                if remaining_qty <= 0:
+                    positions.pop(symbol, None)
+                else:
+                    pos["qty"] = remaining_qty
 
         for symbol, row in day_df.iterrows():
             numeric_score = float(row["numeric_score"])
@@ -283,7 +368,12 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 )
             elif signal_type == "SELL" and symbol in positions:
                 pending_orders.setdefault(next_day, []).append(
-                    {"side": "SELL", "symbol": symbol, "qty": float(positions[symbol]["qty"])}
+                    {
+                        "side": "SELL",
+                        "symbol": symbol,
+                        "qty": float(positions[symbol]["qty"]),
+                        "exit_reason": "signal_sell",
+                    }
                 )
 
         close_prices = day_df["close"].astype(float).to_dict()

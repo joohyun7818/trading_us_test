@@ -9,6 +9,7 @@ from api.routers import backtest
 from api.services.backtester import BacktestConfig
 from api.services import historical_loader
 from api.services import backtester
+from api.services.backtester import _evaluate_dynamic_exit_inline
 
 
 class _AcquireCtx:
@@ -153,6 +154,87 @@ async def test_backtester_runs_and_stores_result(monkeypatch):
 
     saved = await backtester.get_backtest_result(payload["backtest_id"])
     assert saved == payload
+
+
+def test_dynamic_exit_inline_covers_all_exit_reasons():
+    base_kwargs = {
+        "entry_price": 100.0,
+        "highest_price_since_entry": 110.0,
+        "days_held": 5,
+        "entry_atr": 2.0,
+        "quantity": 5.0,
+        "hard_stop_mult": 2.5,
+        "trail_mult": 2.0,
+        "max_holding_days": 20,
+        "partial_mult": 3.0,
+    }
+
+    hard_stop = _evaluate_dynamic_exit_inline(current_price=94.0, **base_kwargs)
+    trailing = _evaluate_dynamic_exit_inline(current_price=105.0, **base_kwargs)
+    time_limit = _evaluate_dynamic_exit_inline(current_price=109.0, **{**base_kwargs, "days_held": 20})
+    partial = _evaluate_dynamic_exit_inline(current_price=108.0, **{**base_kwargs, "highest_price_since_entry": 101.0})
+    hold = _evaluate_dynamic_exit_inline(current_price=101.0, **{**base_kwargs, "highest_price_since_entry": 101.0})
+
+    assert hard_stop["exit_reason"] == "atr_hard_stop"
+    assert trailing["exit_reason"] == "trailing_stop"
+    assert time_limit["exit_reason"] == "time_limit"
+    assert partial["exit_reason"] == "partial_take_profit"
+    assert hold["exit_reason"] == "hold"
+
+
+@pytest.mark.asyncio
+async def test_backtester_default_and_fixed_strategy_are_identical(monkeypatch):
+    rows = [
+        {
+            "symbol": "AAPL",
+            "trade_date": date(2026, 1, 2),
+            "open": 100.0,
+            "high": 103.0,
+            "low": 99.0,
+            "close": 102.0,
+            "rsi_14": 20.0,
+            "sma_20": 95.0,
+            "sma_60": 90.0,
+            "macd": 1.2,
+            "macd_signal": 0.5,
+            "macd_histogram": 0.7,
+            "bollinger_pct_b": 0.1,
+            "volume_ratio": 2.2,
+            "atr_14": 2.0,
+        },
+        {
+            "symbol": "AAPL",
+            "trade_date": date(2026, 1, 3),
+            "open": 101.0,
+            "high": 102.0,
+            "low": 90.0,
+            "close": 92.0,
+            "rsi_14": 35.0,
+            "sma_20": 96.0,
+            "sma_60": 91.0,
+            "macd": 0.6,
+            "macd_signal": 0.5,
+            "macd_histogram": 0.1,
+            "bollinger_pct_b": 0.4,
+            "volume_ratio": 1.1,
+            "atr_14": 2.5,
+        },
+    ]
+    monkeypatch.setattr(backtester, "fetch_all", AsyncMock(return_value=rows))
+
+    default_cfg = BacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 5), initial_capital=10_000)
+    fixed_cfg = BacktestConfig(
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 5),
+        initial_capital=10_000,
+        exit_strategy="fixed",
+    )
+
+    default_result = await backtester.run_backtest(default_cfg)
+    fixed_result = await backtester.run_backtest(fixed_cfg)
+
+    assert default_result["result"]["daily_equity"] == fixed_result["result"]["daily_equity"]
+    assert default_result["result"]["trades"] == fixed_result["result"]["trades"]
 
 
 @pytest.mark.asyncio
