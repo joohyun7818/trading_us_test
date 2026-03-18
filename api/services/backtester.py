@@ -44,6 +44,10 @@ class BacktestConfig(BaseModel):
     trailing_stop_atr_mult: float = 2.0
     max_holding_days: int = 20
     partial_exit_atr_mult: float = 3.0
+    use_atr_sizing: bool = False
+    risk_per_trade_pct: float = 1.0
+    max_single_order_pct: float = 5.0
+    sector_cap_pct: float = 30.0
 
 
 class BacktestResult(BaseModel):
@@ -143,6 +147,53 @@ def _evaluate_dynamic_exit_inline(
         return {"should_exit": True, "exit_reason": "partial_take_profit", "exit_quantity": partial_exit_qty}
 
     return {"should_exit": False, "exit_reason": "hold", "exit_quantity": 0}
+
+
+def _calculate_atr_position_size(
+    *,
+    final_score: float,
+    atr_14: float,
+    price: float,
+    account_equity: float,
+    positions: dict,
+    config: BacktestConfig,
+) -> float:
+    """백테스트 전용 ATR 기반 포지션 사이징 계산."""
+    # ATR이 없으면 가격의 2%로 추정
+    if not atr_14 or atr_14 <= 0:
+        atr_14 = price * 0.02
+
+    # 기본 포지션 사이징 계산
+    risk_amount = account_equity * (config.risk_per_trade_pct / 100.0)
+    dollar_risk = atr_14 * config.hard_stop_atr_mult
+    base_shares = risk_amount / dollar_risk if dollar_risk > 0 else 0
+    base_order_amount = base_shares * price
+
+    # signal_score 스케일링
+    if final_score < 55:
+        score_multiplier = 0.0
+    elif 55 <= final_score < 65:
+        score_multiplier = 0.7
+    elif 65 <= final_score < 80:
+        score_multiplier = 1.0
+    elif 80 <= final_score < 90:
+        score_multiplier = 1.2
+    else:  # final_score >= 90
+        score_multiplier = 1.5
+
+    scaled_order_amount = base_order_amount * score_multiplier
+
+    # 최대 단일 주문 제약
+    max_single_order = account_equity * (config.max_single_order_pct / 100.0)
+    scaled_order_amount = min(scaled_order_amount, max_single_order)
+
+    # 최소 주문 금액 ($200)
+    min_order_amount = 200.0
+    if scaled_order_amount < min_order_amount:
+        return 0.0
+
+    return scaled_order_amount
+
 
 
 async def run_backtest(config: BacktestConfig) -> dict:
@@ -357,12 +408,36 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 if cash <= 0:
                     logger.debug("Skip BUY %s on %s: no cash", symbol, day)
                     continue
-                notional = min(config.max_order_amount, cash)
-                if notional <= 0:
-                    continue
+
                 close_px = float(row["close"])
                 if close_px <= 0:
                     continue
+
+                # ATR 기반 포지션 사이징 또는 고정 금액
+                if config.use_atr_sizing:
+                    atr_14 = float(row["atr_14"]) if pd.notna(row.get("atr_14")) else None
+                    current_equity = cash + sum(
+                        float(p["qty"]) * close_prices.get(s, 0.0)
+                        for s, p in positions.items()
+                    )
+                    notional = _calculate_atr_position_size(
+                        final_score=final_score,
+                        atr_14=atr_14,
+                        price=close_px,
+                        account_equity=current_equity,
+                        positions=positions,
+                        config=config,
+                    )
+                    if notional <= 0:
+                        logger.debug("Skip BUY %s on %s: ATR sizing returned 0", symbol, day)
+                        continue
+                    notional = min(notional, cash)
+                else:
+                    notional = min(config.max_order_amount, cash)
+
+                if notional <= 0:
+                    continue
+
                 pending_orders.setdefault(next_day, []).append(
                     {"side": "BUY", "symbol": symbol, "qty": notional / close_px}
                 )
