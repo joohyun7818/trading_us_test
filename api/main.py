@@ -16,6 +16,7 @@ from api.routers import (
     dashboard,
     finbert,
     geopolitical,
+    lstm,
     macro,
     news,
     performance,
@@ -102,6 +103,7 @@ app.include_router(performance.router)
 app.include_router(geopolitical.router)
 app.include_router(backtest.router)
 app.include_router(finbert.router)
+app.include_router(lstm.router)
 
 
 @app.get("/api/health")
