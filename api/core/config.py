@@ -27,12 +27,10 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_FAST_MODEL: str = "qwen3.5:4b"       # 변경: qwen3:4b → qwen3.5:4b
     OLLAMA_DEEP_MODEL: str = "qwen3.5:4b"       # 변경: qwen3:8b → qwen3.5:4b
-    OLLAMA_VISION_MODEL: str = "qwen3.5:4b"     # 변경: qwen3-vl:8b → qwen3.5:4b
     OLLAMA_EMBED_MODEL: str = "bge-m3"           # 유지
     OLLAMA_KEEP_ALIVE: str = "0"
     OLLAMA_TIMEOUT_GENERATE: int = 120
     OLLAMA_TIMEOUT_EMBED: int = 60
-    OLLAMA_TIMEOUT_VISION: int = 120             # 변경: 180 → 120 (4B는 더 빠름)
 
     # ── Gemini ──────────────────────────────────────────────
     GEMINI_API_KEY: str = ""

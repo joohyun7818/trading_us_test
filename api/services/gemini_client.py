@@ -202,3 +202,89 @@ async def gemini_generate(
                     await asyncio.sleep(2)
 
     return ""
+
+
+# ============================================================
+# 추가: 이미지 분석 (비전) - Gemini API
+# ============================================================
+async def gemini_generate_with_image(
+    image_bytes: bytes,
+    prompt: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    mime_type: str = "image/png",
+) -> str:
+    """Gemini API로 이미지를 분석합니다 (차트 패턴 등)."""
+    api_key = await _get_api_key()
+    if not api_key:
+        logger.error("Gemini API key not configured")
+        return ""
+
+    # gemini_client.py 기존 코드에서 사용하는 모델 설정 읽기
+    config = await _get_embed_config()
+    # flash 모델 사용 (기존 gemini_generate와 동일)
+    model = config.get("gemini_flash_model", "gemini-2.5-flash")
+
+    import base64
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    url = f"{GEMINI_BASE_URL}/models/{model}:generateContent?key={api_key}"
+
+    # 요청 본문 구성
+    parts = [
+        {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": image_b64
+            }
+        },
+        {"text": prompt}
+    ]
+
+    # system_prompt가 있으면 system_instruction으로 전달
+    payload: dict = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        }
+    }
+    if system_prompt:
+        payload["system_instruction"] = {
+            "parts": [{"text": system_prompt}]
+        }
+
+    async with _gemini_lock:
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    resp = await client.post(url, json=payload)
+
+                    if resp.status_code == 429:
+                        wait = 2 ** attempt * 5
+                        logger.warning(f"Gemini vision rate limit, waiting {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        content = candidates[0].get("content", {})
+                        parts_resp = content.get("parts", [])
+                        texts = [p["text"] for p in parts_resp if "text" in p]
+                        result = "".join(texts)
+                        logger.info(f"Gemini vision response: {len(result)} chars")
+                        return result
+
+                    logger.warning("Gemini vision: no candidates in response")
+                    return ""
+
+            except Exception as e:
+                logger.error(f"Gemini vision attempt {attempt+1} failed: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+
+    return ""

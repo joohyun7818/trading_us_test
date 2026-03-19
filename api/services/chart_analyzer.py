@@ -12,7 +12,8 @@ import yfinance as yf
 from api.core.config import settings                       # 추가
 from api.core.database import execute, fetch_one
 from api.core.utils import run_sync
-from api.services.ollama_client import generate_with_image
+from api.services.gemini_client import gemini_generate_with_image
+
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +152,13 @@ Respond ONLY with valid JSON."""
     system = "You are a technical analyst expert. Analyze stock charts precisely. Respond with JSON only."
 
     try:
-        response = await generate_with_image(
-            prompt=prompt,
+        response = await gemini_generate_with_image(
             image_bytes=chart_bytes,
-            system=system,
+            prompt=prompt,
+            system_prompt="You are a professional stock chart analyst. Analyze the candlestick chart image and respond ONLY with valid JSON.",
+            temperature=0.3,
+            max_tokens=2048,
+            mime_type="image/png",
         )
 
         text = response.strip()

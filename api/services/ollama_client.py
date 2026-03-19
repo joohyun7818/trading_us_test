@@ -34,57 +34,78 @@ async def health_check() -> dict:
         logger.error("Ollama health check failed: %s", e)
         return {"status": "offline", "error": str(e)}
 
-
+# ── 변경: generate() 함수 ──
 async def generate(
     prompt: str,
-    model: Optional[str] = None,
-    system: Optional[str] = None,
+    model: str = None,
+    system: str = None,
     temperature: float = 0.3,
     num_predict: int = 2048,
     max_retries: int = 2,
 ) -> str:
-    """Ollama generate API를 호출한다. asyncio.Lock으로 순차 보장."""
-    base = _get_base_url()
+    """Ollama /api/chat 엔드포인트로 텍스트 생성 (think=false)"""
     model = model or settings.OLLAMA_DEEP_MODEL
-    timeout = settings.OLLAMA_TIMEOUT_GENERATE
+    url = f"{settings.OLLAMA_BASE_URL}/api/chat"
 
-    payload: dict[str, Any] = {
+    # messages 구성
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
         "model": model,
-        "prompt": prompt + " /no_think",
+        "messages": messages,
         "stream": False,
+        "think": False,  # ← thinking 모드 비활성화
         "options": {
             "temperature": temperature,
             "num_predict": num_predict,
         },
-        "keep_alive": "30m",
     }
-    if system:
-        payload["system"] = system
+
+    timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT_GENERATE, connect=10.0)
 
     async with _ollama_lock:
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(f"{base}/api/generate", json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data.get("response", "")
-                    logger.error("Ollama generate HTTP %d: %s", resp.status_code, resp.text[:200])
-            except Exception as e:
-                logger.error("Ollama generate attempt %d/%d failed: %s", attempt, max_retries, e)
-                if attempt < max_retries:
-                    await asyncio.sleep(2)
+                    resp = await client.post(url, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
 
+                    # /api/chat 응답 구조: data.message.content
+                    content = data.get("message", {}).get("content", "")
+
+                    if content:
+                        logger.info(
+                            f"Ollama chat response: {len(content)} chars "
+                            f"(model={model}, attempt={attempt+1})"
+                        )
+                        return content
+                    else:
+                        logger.warning(
+                            f"Ollama chat empty response (model={model}, attempt={attempt+1})"
+                        )
+
+            except Exception as e:
+                logger.error(
+                    f"Ollama chat error (model={model}, attempt={attempt+1}/{max_retries+1}): {e}"
+                )
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+
+    logger.error(f"Ollama chat failed after {max_retries+1} attempts (model={model})")
     return ""
 
 
 async def generate_fast(
     prompt: str,
-    system: Optional[str] = None,
-    temperature: float = 0.1,
-    num_predict: int = 2048,
+    system: str = None,
+    temperature: float = 0.3,
+    num_predict: int = 1024,
 ) -> str:
-    """빠른 1차 분류용 generate (qwen3:4b)."""
+    """빠른 분류용 - FAST_MODEL + think=false"""
     return await generate(
         prompt=prompt,
         model=settings.OLLAMA_FAST_MODEL,
@@ -94,50 +115,35 @@ async def generate_fast(
     )
 
 
+# ── 변경: generate_with_image() - deprecated 표시 ──
+
 async def generate_with_image(
     prompt: str,
     image_bytes: bytes,
-    model: Optional[str] = None,
-    system: Optional[str] = None,
+    model: str = None,
+    system: str = None,
     temperature: float = 0.3,
     num_predict: int = 2048,
     max_retries: int = 2,
 ) -> str:
-    """이미지를 포함한 멀티모달 generate (qwen3-vl:8b)."""
-    base = _get_base_url()
-    model = model or settings.OLLAMA_VISION_MODEL
-    timeout = settings.OLLAMA_TIMEOUT_VISION
-    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-    payload: dict[str, Any] = {
-        "model": model,
-        "prompt": prompt + " /no_think",
-        "images": [image_b64],
-        "stream": False,
-        "options": {
-            "temperature": temperature,
-            "num_predict": num_predict,
-        },
-        "keep_alive": "30m",
-    }
-    if system:
-        payload["system"] = system
-
-    async with _ollama_lock:
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(f"{base}/api/generate", json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data.get("response", "")
-                    logger.error("Ollama vision HTTP %d", resp.status_code)
-            except Exception as e:
-                logger.error("Ollama vision attempt %d/%d: %s", attempt, max_retries, e)
-                if attempt < max_retries:
-                    await asyncio.sleep(2)
-
-    return ""
+    """
+    [DEPRECATED] 비전 분석은 Gemini API로 전환됨.
+    gemini_client.gemini_generate_with_image() 를 사용하세요.
+    이 함수는 하위 호환성을 위해 유지됩니다.
+    """
+    logger.warning(
+        "generate_with_image() is deprecated. "
+        "Use gemini_client.gemini_generate_with_image() instead."
+    )
+    # 폴백: Gemini API로 위임
+    from api.services.gemini_client import gemini_generate_with_image
+    return await gemini_generate_with_image(
+        image_bytes=image_bytes,
+        prompt=prompt,
+        system_prompt=system,
+        temperature=temperature,
+        max_tokens=num_predict,
+    )
 
 
 async def embed(
