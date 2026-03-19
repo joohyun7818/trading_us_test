@@ -4,8 +4,11 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from api.core.database import fetch_one
 from api.services.news_indexer import get_collection
 from api.services.ollama_client import embed
+from api.services.gemini_indexer import search_gemini_news
+from api.services.hybrid_search import hybrid_search
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +127,42 @@ async def search_and_build_prompt(
     if question is None:
         question = f"{symbol} outlook"
 
-    context_docs = await search_similar_news(
-        query=f"{symbol} stock news",
-        symbol=symbol,
-    )
+    # Get search method from settings
+    search_method = await _get_rag_search_method()
+    query = f"{symbol} stock news"
+
+    # Branch based on search method
+    if search_method == "gemini":
+        logger.info("Using Gemini search method")
+        context_docs = await search_gemini_news(query, symbol)
+    elif search_method == "hybrid":
+        logger.info("Using hybrid search method")
+        context_docs = await hybrid_search(query, symbol)
+        # Clean text for hybrid results (if not already cleaned)
+        for doc in context_docs:
+            doc["text"] = _clean_text(doc["text"])
+    else:  # Default to "bge"
+        logger.info("Using BGE search method")
+        context_docs = await search_similar_news(query, symbol)
 
     prompt = build_rag_prompt(symbol, question, context_docs, current_indicators)
     return prompt
+
+
+async def _get_rag_search_method() -> str:
+    """
+    Get the RAG search method from settings table.
+    Returns "bge" (default), "gemini", or "hybrid".
+    """
+    try:
+        row = await fetch_one(
+            "SELECT value FROM settings WHERE key = 'rag_search_method'"
+        )
+        if row:
+            method = row["value"].lower()
+            if method in ("bge", "gemini", "hybrid"):
+                return method
+        return "bge"  # Default
+    except Exception as e:
+        logger.warning("Failed to fetch rag_search_method from settings: %s", e)
+        return "bge"  # Default on error
