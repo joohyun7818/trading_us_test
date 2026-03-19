@@ -354,3 +354,27 @@ async def test_invalid_price():
         assert result["quantity"] == 0
         assert "invalid_price" in result["sizing_reason"]
 
+
+@pytest.mark.asyncio
+async def test_percentage_settings_are_normalized():
+    """Test that percent-style settings (1.0, 5.0, 30.0) are normalized correctly."""
+    with patch("api.services.position_sizer.fetch_one", new_callable=AsyncMock) as mock_fetch_one:
+        mock_fetch_one.side_effect = [
+            {"value": "1.0"},  # 1%
+            {"value": "2.5"},  # hard_stop_atr_mult
+            {"value": "5.0"},  # 5%
+            {"value": "30.0"},  # 30%
+            {"value": "200"},  # min_order_amount
+            {"atr_14": 2.5, "latest_price": 100.0, "sector_id": 1},
+        ]
+
+        result = await calculate_position_size(
+            symbol="TEST",
+            signal_score=75.0,
+            account_equity=100000.0,
+            current_positions=[],
+            max_positions=20,
+        )
+
+        assert result["risk_per_trade"] == 1000.0
+        assert result["order_amount"] <= 5000.0

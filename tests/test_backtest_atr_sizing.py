@@ -240,3 +240,54 @@ async def test_minimum_order_constraint_in_backtest():
 
     # Should return 0 if below minimum
     assert order_amount == 0.0
+
+
+def test_apply_sector_cap_in_backtest_caps_requested_notional():
+    """Sector info가 있는 경우 sector cap을 적용한다."""
+    from api.services.backtester import _apply_sector_cap_in_backtest
+
+    config = BacktestConfig(
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 5),
+        sector_cap_pct=30.0,
+    )
+    positions = {
+        "AAA": {"qty": 100.0, "sector_id": 1},
+    }
+    close_prices = {"AAA": 250.0}  # existing exposure = 25,000
+
+    capped = _apply_sector_cap_in_backtest(
+        symbol="BBB",
+        symbol_sector_id=1,
+        positions=positions,
+        close_prices=close_prices,
+        account_equity=100000.0,  # sector cap = 30,000
+        requested_notional=10000.0,
+        config=config,
+    )
+
+    assert capped == 5000.0
+
+
+def test_apply_sector_cap_in_backtest_ignores_missing_sector_info():
+    """sector 정보가 없으면 cap을 건너뛰고 원요청 금액을 유지한다."""
+    from api.services.backtester import _apply_sector_cap_in_backtest
+
+    config = BacktestConfig(
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 5),
+        sector_cap_pct=30.0,
+    )
+
+    requested = 7777.0
+    result = _apply_sector_cap_in_backtest(
+        symbol="NOSECTOR",
+        symbol_sector_id=None,
+        positions={},
+        close_prices={},
+        account_equity=100000.0,
+        requested_notional=requested,
+        config=config,
+    )
+
+    assert result == requested

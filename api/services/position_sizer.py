@@ -2,9 +2,16 @@
 import logging
 from typing import Any, Optional
 
-from api.core.database import fetch_all, fetch_one
+from api.core.database import fetch_one
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_ratio(value: float, default: float) -> float:
+    """설정값을 비율(0~1)로 정규화한다."""
+    if value <= 0:
+        return default
+    return value / 100.0 if value >= 1 else value
 
 
 async def calculate_position_size(
@@ -36,16 +43,16 @@ async def calculate_position_size(
     """
     # 1. 설정값 조회
     risk_pct_row = await fetch_one("SELECT value FROM settings WHERE key = 'risk_per_trade_pct'")
-    risk_pct = float(risk_pct_row["value"]) if risk_pct_row else 0.01
+    risk_pct = _normalize_ratio(float(risk_pct_row["value"]), 0.01) if risk_pct_row else 0.01
 
     hard_stop_mult_row = await fetch_one("SELECT value FROM settings WHERE key = 'hard_stop_atr_mult'")
     hard_stop_atr_mult = float(hard_stop_mult_row["value"]) if hard_stop_mult_row else 2.5
 
     max_single_pct_row = await fetch_one("SELECT value FROM settings WHERE key = 'max_single_order_pct'")
-    max_single_pct = float(max_single_pct_row["value"]) if max_single_pct_row else 0.05
+    max_single_pct = _normalize_ratio(float(max_single_pct_row["value"]), 0.05) if max_single_pct_row else 0.05
 
     sector_cap_pct_row = await fetch_one("SELECT value FROM settings WHERE key = 'sector_cap_pct'")
-    sector_cap_pct = float(sector_cap_pct_row["value"]) if sector_cap_pct_row else 0.30
+    sector_cap_pct = _normalize_ratio(float(sector_cap_pct_row["value"]), 0.30) if sector_cap_pct_row else 0.30
 
     min_order_row = await fetch_one("SELECT value FROM settings WHERE key = 'min_order_amount'")
     min_order_amount = float(min_order_row["value"]) if min_order_row else 200.0

@@ -195,6 +195,37 @@ def _calculate_atr_position_size(
     return scaled_order_amount
 
 
+def _apply_sector_cap_in_backtest(
+    *,
+    symbol: str,
+    symbol_sector_id,
+    positions: dict,
+    close_prices: dict[str, float],
+    account_equity: float,
+    requested_notional: float,
+    config: BacktestConfig,
+) -> float:
+    """백테스트 섹터 상한(옵션)을 적용한다. 섹터 정보가 없으면 원금액을 반환한다."""
+    if symbol_sector_id is None or pd.isna(symbol_sector_id):
+        return requested_notional
+
+    sector_cap = account_equity * (config.sector_cap_pct / 100.0)
+    sector_exposure = 0.0
+    for held_symbol, held_pos in positions.items():
+        held_sector = held_pos.get("sector_id")
+        if held_sector is None or pd.isna(held_sector) or held_sector != symbol_sector_id:
+            continue
+        held_close = close_prices.get(held_symbol, 0.0)
+        if held_close <= 0:
+            continue
+        sector_exposure += float(held_pos["qty"]) * held_close
+
+    remaining = sector_cap - sector_exposure
+    if remaining <= 0:
+        return 0.0
+    return min(requested_notional, remaining)
+
+
 
 async def run_backtest(config: BacktestConfig) -> dict:
     if config.start_date > config.end_date:
@@ -275,6 +306,7 @@ async def run_backtest(config: BacktestConfig) -> dict:
                     "entry_date": day,
                     "highest_price": float(day_df.at[symbol, "high"]),
                     "entry_atr": entry_atr,
+                    "sector_id": day_df.at[symbol, "sector_id"] if "sector_id" in day_df.columns else None,
                 }
             elif order["side"] == "SELL" and symbol in positions:
                 pos = positions.pop(symbol)
@@ -417,8 +449,9 @@ async def run_backtest(config: BacktestConfig) -> dict:
                 if config.use_atr_sizing:
                     atr_14 = float(row["atr_14"]) if pd.notna(row.get("atr_14")) else None
                     current_equity = cash + sum(
-                        float(p["qty"]) * close_prices.get(s, 0.0)
+                        float(p["qty"]) * float(day_df.at[s, "close"])
                         for s, p in positions.items()
+                        if s in day_df.index
                     )
                     notional = _calculate_atr_position_size(
                         final_score=final_score,
@@ -431,6 +464,22 @@ async def run_backtest(config: BacktestConfig) -> dict:
                     if notional <= 0:
                         logger.debug("Skip BUY %s on %s: ATR sizing returned 0", symbol, day)
                         continue
+
+                    symbol_sector_id = row["sector_id"] if "sector_id" in row.index else None
+                    if symbol_sector_id is not None and not pd.isna(symbol_sector_id):
+                        close_prices = day_df["close"].astype(float).to_dict()
+                        notional = _apply_sector_cap_in_backtest(
+                            symbol=symbol,
+                            symbol_sector_id=symbol_sector_id,
+                            positions=positions,
+                            close_prices=close_prices,
+                            account_equity=current_equity,
+                            requested_notional=notional,
+                            config=config,
+                        )
+                        if notional <= 0:
+                            logger.debug("Skip BUY %s on %s: sector cap reached", symbol, day)
+                            continue
                     notional = min(notional, cash)
                 else:
                     notional = min(config.max_order_amount, cash)
