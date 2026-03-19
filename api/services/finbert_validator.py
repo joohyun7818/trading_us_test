@@ -13,15 +13,25 @@ async def validate_finbert_vs_keyword(days: int = 90) -> dict:
     """최근 뉴스를 분석하여 키워드 vs FinBERT의 수익률 상관관계를 비교한다."""
     start_date = (datetime.now() - timedelta(days=days)).date()
 
-    # 최근 뉴스 로드 (최대 2000건)
+    # stock_daily의 가장 최근 날짜를 조회하여 그보다 5일 이상 전인 뉴스만 불러온다.
+    max_date_row = await fetch_one("SELECT MAX(trade_date) as max_date FROM stock_daily")
+    if not max_date_row or not max_date_row["max_date"]:
+        return {"error": "No price data in stock_daily", "sample_count": 0}
+    
+    max_price_date = max_date_row["max_date"]
+    
+    # 최근 90일 ~ (max_price_date - 5일) 전 뉴스 로드 (최대 2000건)
     query = """
-        SELECT symbol, title, content, trade_date, sentiment_score as keyword_score
+        SELECT stock_symbol as symbol, title, body as content, 
+               COALESCE(published_at, crawled_at)::date as trade_date, 
+               sentiment_score as keyword_score
         FROM news_articles
-        WHERE trade_date >= $1
-        ORDER BY trade_date DESC
+        WHERE COALESCE(published_at, crawled_at) >= $1
+          AND COALESCE(published_at, crawled_at) <= ($2::date - INTERVAL '5 days')
+        ORDER BY COALESCE(published_at, crawled_at) DESC
         LIMIT 2000
     """
-    articles = await fetch_all(query, start_date)
+    articles = await fetch_all(query, start_date, max_price_date)
     if not articles:
         return {"error": "No articles found in the given range", "sample_count": 0}
 
@@ -30,15 +40,16 @@ async def validate_finbert_vs_keyword(days: int = 90) -> dict:
         symbol = art["symbol"]
         trade_date = art["trade_date"]
         
-        # 5일 후 수익률 조회
+        # 5일 후 수익률 조회 (시점 대비 가장 가까운 미래 가격)
         five_days_later = trade_date + timedelta(days=5)
         price_query = """
-            SELECT (close - (SELECT close FROM stock_daily WHERE symbol = $1 AND trade_date = $2)) 
-                   / (SELECT close FROM stock_daily WHERE symbol = $1 AND trade_date = $2) * 100 as ret
-            FROM stock_daily
-            WHERE symbol = $1 AND trade_date >= $3
-            ORDER BY trade_date ASC
-            LIMIT 1
+            WITH start_price AS (
+                SELECT close FROM stock_daily WHERE symbol = $1 AND trade_date <= $2 ORDER BY trade_date DESC LIMIT 1
+            ), end_price AS (
+                SELECT close FROM stock_daily WHERE symbol = $1 AND trade_date >= $3 ORDER BY trade_date ASC LIMIT 1
+            )
+            SELECT (e.close - s.close) / s.close * 100 as ret
+            FROM start_price s, end_price e
         """
         ret_row = await fetch_one(price_query, symbol, trade_date, five_days_later)
         if not ret_row or ret_row["ret"] is None:

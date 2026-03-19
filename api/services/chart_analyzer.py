@@ -1,4 +1,4 @@
-# mplfinance 캔들차트 PNG 생성 → qwen3-vl:8b 패턴 분석, analysis_cache 캐싱
+# mplfinance 캔들차트 PNG 생성 → qwen3.5:4b 패턴 분석, analysis_cache 캐싱
 import io
 import json
 import logging
@@ -9,6 +9,7 @@ import mplfinance as mpf
 import pandas as pd
 import yfinance as yf
 
+from api.core.config import settings                       # 추가
 from api.core.database import execute, fetch_one
 from api.core.utils import run_sync
 from api.services.ollama_client import generate_with_image
@@ -48,7 +49,7 @@ async def _save_cache(symbol: str, result: dict) -> None:
             VALUES ($1, 'visual', $2, $3, NOW() + INTERVAL '4 hours')
             """,
             symbol,
-            "qwen3-vl:8b",
+            settings.OLLAMA_VISION_MODEL,    # 변경: 하드코딩 "qwen3-vl:8b" → settings 참조
             json.dumps(result),
         )
     except Exception as e:

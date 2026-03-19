@@ -25,23 +25,23 @@ class Settings(BaseSettings):
 
     # ── Ollama ──────────────────────────────────────────────
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_FAST_MODEL: str = "qwen3:4b"
-    OLLAMA_DEEP_MODEL: str = "qwen3:8b"
-    OLLAMA_VISION_MODEL: str = "qwen3-vl:8b"
-    OLLAMA_EMBED_MODEL: str = "bge-m3"
+    OLLAMA_FAST_MODEL: str = "qwen3.5:4b"       # 변경: qwen3:4b → qwen3.5:4b
+    OLLAMA_DEEP_MODEL: str = "qwen3.5:4b"       # 변경: qwen3:8b → qwen3.5:4b
+    OLLAMA_VISION_MODEL: str = "qwen3.5:4b"     # 변경: qwen3-vl:8b → qwen3.5:4b
+    OLLAMA_EMBED_MODEL: str = "bge-m3"           # 유지
     OLLAMA_KEEP_ALIVE: str = "0"
     OLLAMA_TIMEOUT_GENERATE: int = 120
     OLLAMA_TIMEOUT_EMBED: int = 60
-    OLLAMA_TIMEOUT_VISION: int = 180
+    OLLAMA_TIMEOUT_VISION: int = 120             # 변경: 180 → 120 (4B는 더 빠름)
 
     # ── Gemini ──────────────────────────────────────────────
     GEMINI_API_KEY: str = ""
-    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
-    GEMINI_EMBED_DIM: int = 768
-    GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"   # 유지
+    GEMINI_EMBED_DIM: int = 768                         # 유지
+    GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"        # 유지
 
     # ── Analysis ────────────────────────────────────────────
-    ANALYSIS_MODE: str = "text_numeric"
+    ANALYSIS_MODE: str = "full"                  # 변경: text_numeric → full
 
     # ── Application ─────────────────────────────────────────
     APP_HOST: str = "0.0.0.0"
