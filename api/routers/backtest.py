@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from api.services.backtester import BacktestConfig, get_backtest_result, run_backtest
 from api.services.backtest_reporter import compare_reports, generate_report
+from api.services.backtest_optimizer import run_sensitivity
 from api.services.historical_loader import get_history_status, load_history
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
@@ -10,6 +11,14 @@ router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
 class CompareRequest(BaseModel):
     ids: list[str]
+
+
+class SensitivityRequest(BaseModel):
+    base_config: dict
+    search_space: dict
+    objective: str = "sharpe"
+    walk_forward: bool = False
+    train_ratio: float = 0.7
 
 
 @router.post("/load-history")
@@ -59,3 +68,18 @@ async def compare_backtests(request: CompareRequest) -> dict:
     if not request.ids:
         raise HTTPException(status_code=400, detail="ids list cannot be empty")
     return await compare_reports(request.ids)
+
+
+@router.post("/sensitivity")
+async def run_sensitivity_analysis(request: SensitivityRequest) -> dict:
+    """파라미터 그리드 탐색을 수행한다."""
+    try:
+        return await run_sensitivity(
+            base_config=request.base_config,
+            search_space=request.search_space,
+            objective=request.objective,
+            walk_forward=request.walk_forward,
+            train_ratio=request.train_ratio
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
