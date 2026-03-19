@@ -3,7 +3,27 @@ import logging
 import re
 from typing import Optional
 
+from api.core.database import fetch_one
+from api.services.finbert_sentiment import finbert_analyzer
+
 logger = logging.getLogger(__name__)
+
+
+async def analyze_sentiment(text: str, method: str = "auto") -> dict:
+    """감성 분석을 수행한다. method에 따라 키워드 또는 FinBERT를 사용한다."""
+    if method == "auto":
+        row = await fetch_one("SELECT value FROM settings WHERE key = 'sentiment_method'")
+        method = row["value"] if row else "keyword"
+
+    if method == "finbert":
+        try:
+            return await finbert_analyzer.analyze(text)
+        except Exception as e:
+            logger.error("FinBERT analysis failed, falling back to keyword: %s", e)
+            return analyze_sentiment_keywords(text)
+
+    return analyze_sentiment_keywords(text)
+
 
 # ── 긍정 키워드 사전 (150+ 항목, 가중치) ──────────────────────
 POSITIVE_KEYWORDS: dict[str, float] = {
