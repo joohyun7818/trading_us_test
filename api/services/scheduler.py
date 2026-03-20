@@ -146,8 +146,36 @@ async def _geopolitical_crawl() -> None:
         logger.error("Geopolitical crawl failed: %s", e)
 
 
+async def _health_check() -> None:
+    """5분 주기: 시스템 상태 체크 및 알림 처리."""
+    from api.services.monitoring import run_health_checks
+    from api.services.alerting import process_alerts
+    try:
+        alerts = await run_health_checks()
+        if alerts:
+            result = await process_alerts(alerts)
+            logger.info("Health check: %d alerts processed, %d critical, %d sent to Slack",
+                       result.get("alerts_processed", 0),
+                       result.get("critical_count", 0),
+                       result.get("slack_sent", 0))
+        else:
+            logger.info("Health check: all systems healthy")
+    except Exception as e:
+        logger.error("Health check failed: %s", e)
+
+
+async def _daily_report() -> None:
+    """매일 16:30 EST: 일일 거래 리포트 전송."""
+    from api.services.alerting import send_daily_report
+    try:
+        result = await send_daily_report()
+        logger.info("Daily report: %s", result.get("status"))
+    except Exception as e:
+        logger.error("Daily report failed: %s", e)
+
+
 def setup_scheduler() -> AsyncIOScheduler:
-    """10개 스케줄 작업을 등록하고 스케줄러를 반환한다."""
+    """12개 스케줄 작업을 등록하고 스케줄러를 반환한다."""
     scheduler = get_scheduler()
 
     # 기존 7개
@@ -224,5 +252,21 @@ def setup_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    logger.info("Scheduler setup complete: 10 jobs registered")
+    # 신규 모니터링 2개
+    scheduler.add_job(
+        _health_check,
+        IntervalTrigger(minutes=5),
+        id="health_check",
+        name="System Health Check (5min)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _daily_report,
+        CronTrigger(hour=16, minute=30, day_of_week="mon-fri"),
+        id="daily_report",
+        name="Daily Trading Report (16:30 EST)",
+        replace_existing=True,
+    )
+
+    logger.info("Scheduler setup complete: 12 jobs registered")
     return scheduler
