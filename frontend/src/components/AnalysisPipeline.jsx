@@ -99,7 +99,7 @@ export default function AnalysisPipeline({ signals }) {
                   ? item.score >= 70 ? 'text-emerald-400' : item.score <= 30 ? 'text-rose-400' : 'text-blue-400'
                   : 'text-slate-600'
               }`}>
-                {item.active ? item.score.toFixed(1) : 'OFF'}
+                {item.active ? Number(item.score).toFixed(1) : 'OFF'}
               </p>
               <span className={`inline-block w-2 h-2 rounded-full mt-1 ${
                 item.active ? 'bg-emerald-400' : 'bg-slate-600'

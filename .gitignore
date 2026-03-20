@@ -20,6 +20,16 @@ env/
 .env
 .env.local
 .env.*.local
+*.env
+auth_key.json
+secrets.json
+
+# Keys and Certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pub
 
 # Python version
 .python-version
@@ -38,6 +48,7 @@ env/
 # Logs
 *.log
 logs/
+*.out
 
 # Database / ChromaDB
 chroma_data/
@@ -49,6 +60,23 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Local Data and Backtests
+*.json
+!package.json
+!package-lock.json
+!pyproject.toml
+!gemini-*.toml
+backtest_*.json
+bt*.json
+*.csv
+*.xlsx
+
+# Models
+api/services/models/*.pt
+api/services/models/*.h5
+api/services/models/*.onnx
+api/services/models/*.bin
+
 # Docker
 .dockerignore
 
@@ -56,3 +84,7 @@ frontend/.vite/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Tool specific
+.gemini/
+gha-creds-*.json

@@ -19,7 +19,7 @@ function ScoreBar({ score, label }) {
       <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs text-slate-300 w-8 text-right">{score != null ? score.toFixed(0) : "—"}</span>
+      <span className="text-xs text-slate-300 w-8 text-right">{score != null ? Number(score).toFixed(0) : "—"}</span>
     </div>
   );
 }

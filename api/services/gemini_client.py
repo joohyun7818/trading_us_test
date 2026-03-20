@@ -36,7 +36,7 @@ async def _get_embed_config() -> dict:
 async def gemini_embed(
     text: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> list[float]:
     """Gemini Embedding API로 텍스트 임베딩을 생성한다."""
     api_key = await _get_api_key()
@@ -72,7 +72,8 @@ async def gemini_embed(
                         embedding = data.get("embedding", {}).get("values", [])
                         return embedding
                     elif resp.status_code == 429:
-                        wait = min(2 ** attempt, 30)
+                        # 429 발생 시 더 긴 대기 시간 (5, 10, 20, 40, 60초)
+                        wait = min(2 ** attempt * 5, 60)
                         logger.warning(
                             "Gemini embed rate limited (attempt %d/%d), "
                             "waiting %ds",
@@ -90,7 +91,7 @@ async def gemini_embed(
                     attempt, max_retries, e,
                 )
                 if attempt < max_retries:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(2 ** attempt)
 
     return []
 
@@ -191,7 +192,7 @@ async def gemini_generate(
                             return parts[0].get("text", "") if parts else ""
                         return ""
                     elif resp.status_code == 429:
-                        wait = min(2 ** attempt, 30)
+                        wait = min(2 ** attempt * 5, 60)
                         logger.warning("Gemini generate rate limited, waiting %ds", wait)
                         await asyncio.sleep(wait)
                     else:

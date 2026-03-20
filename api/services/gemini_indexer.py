@@ -12,7 +12,7 @@ from api.services.gemini_client import gemini_embed
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "stock_news_gemini"
-BATCH_SIZE = 50
+BATCH_SIZE = 10
 
 _chroma_client: Optional[chromadb.ClientAPI] = None
 _collection: Optional[chromadb.Collection] = None
@@ -126,8 +126,8 @@ async def index_with_gemini() -> dict:
                 )
                 total_indexed += 1
 
-                # RPM 제한 대비 (무료: ~15 RPM)
-                await asyncio.sleep(1.0)
+                # RPM 제한 대비 (무료: ~15 RPM, 안전하게 5초 대기)
+                await asyncio.sleep(5.0)
 
             except Exception as e:
                 logger.error("Gemini indexing failed for article %d: %s", article["id"], e)
