@@ -423,3 +423,166 @@ CREATE INDEX IF NOT EXISTS idx_ds_snapshot_date ON daily_snapshot (snapshot_date
           );
 
 CREATE INDEX IF NOT EXISTS idx_wr_week_start ON weekly_report (week_start);
+
+-- ============================================================
+-- Migration: Missing Tables and Columns
+-- ============================================================
+
+-- ============================================================
+-- 1. stock_daily 테이블
+-- ============================================================
+CREATE TABLE IF NOT EXISTS stock_daily (
+      id SERIAL PRIMARY KEY
+    , symbol VARCHAR(10) NOT NULL
+    , trade_date DATE NOT NULL
+    , open NUMERIC(12, 4)
+    , high NUMERIC(12, 4)
+    , low NUMERIC(12, 4)
+    , close NUMERIC(12, 4)
+    , volume BIGINT
+    , adj_close NUMERIC(12, 4)
+    , rsi_14 NUMERIC(8, 4)
+    , sma_20 NUMERIC(12, 4)
+    , sma_60 NUMERIC(12, 4)
+    , macd NUMERIC(12, 6)
+    , macd_signal NUMERIC(12, 6)
+    , macd_histogram NUMERIC(12, 6)
+    , bollinger_upper NUMERIC(12, 4)
+    , bollinger_lower NUMERIC(12, 4)
+    , bollinger_pct_b NUMERIC(8, 4)
+    , volume_ratio NUMERIC(8, 4)
+    , atr_14 NUMERIC(12, 4)
+    , sector_id INTEGER REFERENCES sectors(id)
+    , created_at TIMESTAMPTZ DEFAULT NOW()
+    , UNIQUE(symbol, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_daily_symbol ON stock_daily(symbol);
+CREATE INDEX IF NOT EXISTS idx_stock_daily_trade_date ON stock_daily(trade_date);
+CREATE INDEX IF NOT EXISTS idx_stock_daily_sector_id ON stock_daily(sector_id);
+CREATE INDEX IF NOT EXISTS idx_stock_daily_symbol_date ON stock_daily(symbol, trade_date);
+
+-- ============================================================
+-- 2. geopolitical_events 테이블
+-- ============================================================
+CREATE TABLE IF NOT EXISTS geopolitical_events (
+      id SERIAL PRIMARY KEY
+    , title VARCHAR(500) NOT NULL
+    , body TEXT
+    , source VARCHAR(100)
+    , url TEXT
+    , url_hash VARCHAR(64) UNIQUE NOT NULL
+    , published_at TIMESTAMPTZ
+    , crawled_at TIMESTAMPTZ DEFAULT NOW()
+    , category VARCHAR(50)
+    , severity VARCHAR(20)
+    , sentiment_score NUMERIC(6, 4)
+    , market_impact_score NUMERIC(6, 4)
+    , affected_sectors TEXT[]
+    , is_escalation BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_geopolitical_events_url_hash ON geopolitical_events(url_hash);
+CREATE INDEX IF NOT EXISTS idx_geopolitical_events_published_at ON geopolitical_events(published_at);
+CREATE INDEX IF NOT EXISTS idx_geopolitical_events_category ON geopolitical_events(category);
+CREATE INDEX IF NOT EXISTS idx_geopolitical_events_severity ON geopolitical_events(severity);
+CREATE INDEX IF NOT EXISTS idx_geopolitical_events_is_escalation ON geopolitical_events(is_escalation);
+
+-- ============================================================
+-- 3. geopolitical_regime 테이블
+-- ============================================================
+CREATE TABLE IF NOT EXISTS geopolitical_regime (
+      id SERIAL PRIMARY KEY
+    , war_risk NUMERIC(6, 4)
+    , financial_crisis_risk NUMERIC(6, 4)
+    , sanctions_risk NUMERIC(6, 4)
+    , pandemic_risk NUMERIC(6, 4)
+    , political_risk NUMERIC(6, 4)
+    , trade_war_risk NUMERIC(6, 4)
+    , terrorism_risk NUMERIC(6, 4)
+    , natural_disaster_risk NUMERIC(6, 4)
+    , composite_risk NUMERIC(6, 4)
+    , risk_regime VARCHAR(20)
+    , risk_trend VARCHAR(20)
+    , market_sentiment_impact NUMERIC(6, 4)
+    , safe_haven_signal VARCHAR(20)
+    , top_events JSONB
+    , created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_geopolitical_regime_created_at ON geopolitical_regime(created_at);
+CREATE INDEX IF NOT EXISTS idx_geopolitical_regime_risk_regime ON geopolitical_regime(risk_regime);
+
+-- ============================================================
+-- 4. system_alerts 테이블
+-- ============================================================
+CREATE TABLE IF NOT EXISTS system_alerts (
+      id SERIAL PRIMARY KEY
+    , severity VARCHAR(20) NOT NULL
+    , category VARCHAR(50) NOT NULL
+    , message TEXT NOT NULL
+    , auto_action VARCHAR(100)
+    , resolved BOOLEAN DEFAULT FALSE
+    , created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_alerts_severity ON system_alerts(severity);
+CREATE INDEX IF NOT EXISTS idx_system_alerts_category ON system_alerts(category);
+CREATE INDEX IF NOT EXISTS idx_system_alerts_resolved ON system_alerts(resolved);
+CREATE INDEX IF NOT EXISTS idx_system_alerts_created_at ON system_alerts(created_at);
+
+-- ============================================================
+-- 5. news_articles 테이블에 컬럼 추가 (ALTER TABLE)
+-- ============================================================
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='news_articles' AND column_name='full_text') THEN
+        ALTER TABLE news_articles ADD COLUMN full_text TEXT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='news_articles' AND column_name='full_text_crawled') THEN
+        ALTER TABLE news_articles ADD COLUMN full_text_crawled BOOLEAN DEFAULT FALSE;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='news_articles' AND column_name='full_text_length') THEN
+        ALTER TABLE news_articles ADD COLUMN full_text_length INTEGER;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='news_articles' AND column_name='gemini_embedded') THEN
+        ALTER TABLE news_articles ADD COLUMN gemini_embedded BOOLEAN DEFAULT FALSE;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='news_articles' AND column_name='embedding_model') THEN
+        ALTER TABLE news_articles ADD COLUMN embedding_model VARCHAR(50);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='news_articles' AND column_name='embedding_dim') THEN
+        ALTER TABLE news_articles ADD COLUMN embedding_dim INTEGER;
+    END IF;
+END $$;
+
+-- news_articles 인덱스 추가
+CREATE INDEX IF NOT EXISTS idx_news_full_text_crawled ON news_articles(full_text_crawled);
+CREATE INDEX IF NOT EXISTS idx_news_gemini_embedded ON news_articles(gemini_embedded);
+
+-- ============================================================
+-- 6. macro_regime 테이블에 컬럼 추가 (ALTER TABLE)
+-- ============================================================
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='macro_regime' AND column_name='geopolitical_risk') THEN
+        ALTER TABLE macro_regime ADD COLUMN geopolitical_risk NUMERIC(6, 4);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='macro_regime' AND column_name='geopolitical_regime') THEN
+        ALTER TABLE macro_regime ADD COLUMN geopolitical_regime VARCHAR(20);
+    END IF;
+END $$;
