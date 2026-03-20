@@ -44,11 +44,38 @@ async def _calc_geopolitical_score() -> float:
 async def calculate_regime() -> dict:
     """8개 매크로 지표 → regime_score → 레짐을 판단한다. (국제정세 포함)"""
     sp500_trend = await _calc_sp500_trend()
-    vix_score = await _calc_vix_score()
+
+    # VIX를 먼저 계산하여 실제 VIX 값과 점수를 모두 얻음
+    vix_value = None
+    vix_score = None
+    try:
+        vix = yf.Ticker("^VIX")
+        hist = await run_sync(vix.history, period="5d")
+        if not hist.empty:
+            vix_value = float(hist["Close"].iloc[-1])
+            # VIX 점수 계산
+            if vix_value <= 12:
+                vix_score = 0.9
+            elif vix_value <= 15:
+                vix_score = 0.8
+            elif vix_value <= 20:
+                vix_score = 0.6
+            elif vix_value <= 25:
+                vix_score = 0.4
+            elif vix_value <= 30:
+                vix_score = 0.25
+            elif vix_value <= 40:
+                vix_score = 0.15
+            else:
+                vix_score = 0.05
+    except Exception as e:
+        logger.error("VIX calc failed: %s", e)
+
     yield_curve = await _calc_yield_curve()
     market_rsi = await _calc_market_rsi()
     breadth = await _calc_breadth()
-    put_call = _calc_put_call()
+    # VIX 값을 put_call 계산에 전달하여 중복 조회 방지
+    put_call = await _calc_put_call(vix_value)
     macro_sentiment = await _calc_macro_sentiment()
     geopolitical = await _calc_geopolitical_score()  # 신규
 
@@ -141,33 +168,6 @@ async def _calc_sp500_trend() -> Optional[float]:
         return None
 
 
-async def _calc_vix_score() -> Optional[float]:
-    """VIX를 0-1 점수로 변환한다 (높은 VIX = 낮은 점수 = 공포)."""
-    try:
-        vix = yf.Ticker("^VIX")
-        hist = await run_sync(vix.history, period="5d")
-        if hist.empty:
-            return None
-        vix_val = float(hist["Close"].iloc[-1])
-        if vix_val <= 12:
-            return 0.9
-        elif vix_val <= 15:
-            return 0.8
-        elif vix_val <= 20:
-            return 0.6
-        elif vix_val <= 25:
-            return 0.4
-        elif vix_val <= 30:
-            return 0.25
-        elif vix_val <= 40:
-            return 0.15
-        else:
-            return 0.05
-    except Exception as e:
-        logger.error("VIX calc failed: %s", e)
-        return None
-
-
 async def _calc_yield_curve() -> Optional[float]:
     """수익률 곡선 스프레드 점수 (0-1)."""
     try:
@@ -235,10 +235,46 @@ async def _calc_breadth() -> Optional[float]:
         return None
 
 
-def _calc_put_call() -> Optional[float]:
+async def _calc_put_call(vix_value: Optional[float] = None) -> float:
     """풋콜 비율 기반 점수 (0-1, 높은 P/C = 공포 = 낮은 점수).
-    실시간 풋콜 비율 데이터 소스 미연동으로 중립값 반환."""
-    return 0.5
+    VIX를 P/C ratio의 proxy로 사용: VIX > 30이면 P/C가 높은(공포) 것으로 간주.
+
+    Args:
+        vix_value: VIX 값. None이면 직접 조회.
+
+    Returns:
+        0~1 사이의 점수. 높은 VIX(공포) → 낮은 점수, 낮은 VIX(탐욕) → 높은 점수
+    """
+    try:
+        # VIX 값이 제공되지 않으면 직접 조회
+        if vix_value is None:
+            vix = yf.Ticker("^VIX")
+            hist = await run_sync(vix.history, period="5d")
+            if hist.empty:
+                logger.warning("VIX data unavailable for put_call calculation")
+                return 0.5
+            vix_value = float(hist["Close"].iloc[-1])
+
+        # VIX 기반 P/C ratio proxy 점수 계산
+        # 낮은 VIX (낙관적) → 높은 점수 (낮은 P/C)
+        # 높은 VIX (공포) → 낮은 점수 (높은 P/C)
+        if vix_value <= 12:
+            return 0.9  # 매우 낮은 VIX = 낮은 P/C = 탐욕
+        elif vix_value <= 15:
+            return 0.8
+        elif vix_value <= 20:
+            return 0.6
+        elif vix_value <= 25:
+            return 0.4
+        elif vix_value <= 30:
+            return 0.3
+        elif vix_value <= 40:
+            return 0.15  # 높은 VIX = 높은 P/C = 공포
+        else:
+            return 0.05  # 매우 높은 VIX = 매우 높은 P/C = 극도의 공포
+    except Exception as e:
+        logger.error("Put/Call proxy calc failed: %s", e)
+        return 0.5
 
 
 async def _calc_macro_sentiment() -> float:
