@@ -21,6 +21,7 @@ from api.routers import (
     news,
     performance,
     rag,
+    system,
 )
 from api.services.news_indexer import get_chroma_client
 from api.services.scheduler import get_scheduler, setup_scheduler
@@ -104,6 +105,7 @@ app.include_router(geopolitical.router)
 app.include_router(backtest.router)
 app.include_router(finbert.router)
 app.include_router(lstm.router)
+app.include_router(system.router)
 
 
 @app.get("/api/health")
