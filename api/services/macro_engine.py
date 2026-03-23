@@ -44,11 +44,11 @@ async def _calc_geopolitical_score() -> float:
 async def calculate_regime() -> dict:
     """8개 매크로 지표 → regime_score → 레짐을 판단한다. (국제정세 포함)"""
     sp500_trend = await _calc_sp500_trend()
-    vix_score = await _calc_vix_score()
+    vix_score, vix_value = await _calc_vix_score()
     yield_curve = await _calc_yield_curve()
     market_rsi = await _calc_market_rsi()
     breadth = await _calc_breadth()
-    put_call = _calc_put_call()
+    put_call = await _calc_put_call(vix_value)
     macro_sentiment = await _calc_macro_sentiment()
     geopolitical = await _calc_geopolitical_score()  # 신규
 
@@ -141,31 +141,33 @@ async def _calc_sp500_trend() -> Optional[float]:
         return None
 
 
-async def _calc_vix_score() -> Optional[float]:
-    """VIX를 0-1 점수로 변환한다 (높은 VIX = 낮은 점수 = 공포)."""
+async def _calc_vix_score() -> tuple[Optional[float], Optional[float]]:
+    """VIX를 0-1 점수로 변환한다 (높은 VIX = 낮은 점수 = 공포).
+    Returns: (score, raw_vix_value) tuple"""
     try:
         vix = yf.Ticker("^VIX")
         hist = await run_sync(vix.history, period="5d")
         if hist.empty:
-            return None
+            return (None, None)
         vix_val = float(hist["Close"].iloc[-1])
         if vix_val <= 12:
-            return 0.9
+            score = 0.9
         elif vix_val <= 15:
-            return 0.8
+            score = 0.8
         elif vix_val <= 20:
-            return 0.6
+            score = 0.6
         elif vix_val <= 25:
-            return 0.4
+            score = 0.4
         elif vix_val <= 30:
-            return 0.25
+            score = 0.25
         elif vix_val <= 40:
-            return 0.15
+            score = 0.15
         else:
-            return 0.05
+            score = 0.05
+        return (score, vix_val)
     except Exception as e:
         logger.error("VIX calc failed: %s", e)
-        return None
+        return (None, None)
 
 
 async def _calc_yield_curve() -> Optional[float]:
@@ -235,10 +237,32 @@ async def _calc_breadth() -> Optional[float]:
         return None
 
 
-def _calc_put_call() -> Optional[float]:
+async def _calc_put_call(vix_value: Optional[float] = None) -> float:
     """풋콜 비율 기반 점수 (0-1, 높은 P/C = 공포 = 낮은 점수).
-    실시간 풋콜 비율 데이터 소스 미연동으로 중립값 반환."""
-    return 0.5
+    VIX 기반 P/C ratio proxy 사용:
+    - VIX > 30: 공포 (높은 P/C) → 낮은 점수 (0.2)
+    - VIX 25-30: 높은 불안 → 점수 0.3
+    - VIX 20-25: 중간 불안 → 점수 0.45
+    - VIX 15-20: 정상 → 점수 0.6
+    - VIX < 15: 낮은 불안 (낮은 P/C) → 높은 점수 (0.8)
+    """
+    if vix_value is None:
+        return 0.5
+
+    try:
+        if vix_value > 30:
+            return 0.2
+        elif vix_value > 25:
+            return 0.3
+        elif vix_value > 20:
+            return 0.45
+        elif vix_value > 15:
+            return 0.6
+        else:
+            return 0.8
+    except Exception as e:
+        logger.error("Put/Call calc failed: %s", e)
+        return 0.5
 
 
 async def _calc_macro_sentiment() -> float:
